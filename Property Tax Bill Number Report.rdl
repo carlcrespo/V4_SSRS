@@ -1,0 +1,1351 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner" xmlns:am="http://schemas.microsoft.com/sqlserver/reporting/authoringmetadata">
+  <am:AuthoringMetadata>
+    <am:CreatedBy>
+      <am:Name>SSDTRS</am:Name>
+      <am:Version>17.14.36804.6</am:Version>
+    </am:CreatedBy>
+    <am:UpdatedBy>
+      <am:Name>SSDTRS</am:Name>
+      <am:Version>17.14.36804.6</am:Version>
+    </am:UpdatedBy>
+    <am:LastModifiedTimestamp>2026-02-09T22:34:41.8274025Z</am:LastModifiedTimestamp>
+  </am:AuthoringMetadata>
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="DataSource1">
+      <DataSourceReference>LWDW</DataSourceReference>
+      <rd:SecurityType>Integrated</rd:SecurityType>
+      <rd:DataSourceID>d1b95957-9a40-4f9b-b44d-a6f075c918fc</rd:DataSourceID>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="DataSet2">
+      <Query>
+        <DataSourceName>DataSource1</DataSourceName>
+        <QueryParameters>
+          <QueryParameter Name="@Date1">
+            <Value>=Parameters!Date1.Value</Value>
+          </QueryParameter>
+          <QueryParameter Name="@Date2">
+            <Value>=Parameters!Date2.Value</Value>
+          </QueryParameter>
+        </QueryParameters>
+        <CommandText>--USE [LW_PROD]
+--GO
+--/****** Object:  UserDefinedFunction [dbo].[f_PropertyTaxBillNumber_20160426]    Script Date: 2/27/2019 9:17:13 AM ******/
+--SET ANSI_NULLS ON
+--GO
+--SET QUOTED_IDENTIFIER ON
+--GO
+---- =============================================
+---- Author:		Carl Crespo
+---- Create date: 2016-04-20
+---- Description:	Property Tax Bill Number Report
+---- =============================================
+--ALTER FUNCTION [dbo].[f_PropertyTaxBillNumber_20160426]
+--(	
+--@Date1 Date, @Date2 Date
+--)
+--RETURNS TABLE 
+--AS
+--RETURN 
+--(
+-----------------------------------------------------
+---- Test Code
+--Declare @Date1 Date, @Date2 Date
+--Set @Date1 = '1/1/2019'
+--Set @Date2 = '1/31/2019'
+-----------------------------------------------------
+ --Select * From f_PropertyTaxBillNumber_20160420('1/1/2013','4/1/2016')
+-------------------------------------------------------
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED 
+
+;
+WITH
+cte_LabelingLessor
+AS
+(
+SELECT lp.LeaseID
+      ,lp.CustomerID
+      ,lp.SequenceNumber
+	  ,fp.FundingSourceNumber --LabellingLessor
+	  ,fp.Company AS LabellingLessor
+  FROM Lease_Profile lp
+  INNER JOIN FundingSource_Profile fp
+	ON fp.FundingSourceId = lp.LabellingLessorID
+)
+Select Top 100 Percent  
+		 r.LeaseID
+		,r.JournalID 
+		,r.SequenceNumber
+		,r.AccountNumber
+		,r.CustomerName
+		,r.PropertyTaxAmount 
+		,r.[Property Tax Bill Number]
+		,r.ReportingYear
+		,r.LabellingLessor LabelingLessor
+		,r.PostDate
+		,r.Reversed
+		,r.ReversalJournalID
+From
+(
+		Select   tax.LeaseID
+				,tax.JournalID 
+				--,e.LeaseSequenceNumber SequenceNumber
+				,lp.SequenceNumber
+				--,e.CustomerAccountNumber AccountNumber
+				,cp.AccountNumber
+				--,e.CustomerName
+				,cp.CustomerName
+				,tax.PropertyTaxAmount * (-1) AS PropertyTaxAmount
+				,tax.[Property Tax Bill Number]
+				,tax.ReportingYear
+				--,e.LabellingLessorName LabelingLessor
+				,ll.LabellingLessor 
+				--,Coalesce(Format(e.PostDate,'yyyy-MM-dd'),'') PostDate
+				,FORMAT(gl.SysPostDateAndTime,'yyyy-MM-dd') PostDate
+				,tax.Reversed
+				,tax.ReversalJournalID
+		From
+		(
+			SELECT   t.[LeaseID]
+					,t.JournalID
+					,Sum(t.Amount) PropertyTaxAmount 
+					,t.BillNumber [Property Tax Bill Number]
+					,t.ReportingYear
+					,'No' Reversed
+					,t.ReversalJournalID
+			  FROM PropertyTax_Assessment t 
+			  Where t.ReversalJournalID is NULL  
+		Group By	t.LeaseID
+				  ,t.BillNumber
+				  ,t.ReportingYear
+				  ,t.JournalID
+				  ,t.ReversalJournalID
+		) tax
+			INNER JOIN [GeneralLedger_Journal] gl
+				On tax.JournalID = gl.JournalID
+				AND Cast(gl.SysPostDateAndTime AS DATE) Between @Date1 And @Date2
+			INNER JOIN Lease_Profile lp
+				ON tax.LeaseID = lp.LeaseID
+			INNER JOIN dbo.Customer_Profile cp
+				ON cp.CustomerID = lp.CustomerID
+			INNER JOIN cte_LabelingLessor ll
+				ON tax.LeaseID = ll.LeaseID
+			---------------------------------------------------------------
+			--Left Join GeneralLedger_Entries e
+			--	On tax.JournalID = e.JournalID and tax.LeaseID = e.LeaseID
+			--WHERE CONVERT(DATE,e.PostDate) BETWEEN @Date1 AND @Date2
+		UNION
+		Select   tax.LeaseID
+				,tax.JournalID 
+				--,e.LeaseSequenceNumber SequenceNumber
+				,lp.SequenceNumber
+				--,e.CustomerAccountNumber AccountNumber
+				,cp.AccountNumber
+				--,e.CustomerName
+				,cp.CustomerName
+				,tax.PropertyTaxAmount  AS PropertyTaxAmount
+				,tax.[Property Tax Bill Number]
+				,tax.ReportingYear
+				--,e.LabellingLessorName LabelingLessor
+				,ll.LabellingLessor 
+				--,Coalesce(Format(tax.PostDate,'yyyy-MM-dd'),'') PostDate
+				,FORMAT(gl.SysPostDateAndTime,'yyyy-MM-dd') PostDate
+				,tax.Reversed
+				,tax.ReversalJournalID
+		From
+		(
+			SELECT   t.[LeaseID]
+					,t.ReversalJournalID JournalID
+					,Sum(t.Amount) PropertyTaxAmount 
+					,t.BillNumber [Property Tax Bill Number]
+					,t.ReportingYear
+					,t.ReversalPostDate PostDate
+					, 'Yes' Reversed
+					,t.ReversalJournalID
+			  FROM PropertyTax_Assessment t 
+			  Where t.ReversalJournalID is NOT NULL  
+			Group By   t.LeaseID
+					  ,t.BillNumber
+					  ,t.ReportingYear
+					  ,t.JournalID
+					  ,t.ReversalJournalID
+					  ,t.ReversalPostDate 
+		) tax
+			-------------------------------------------------------------------------------------------------------
+			INNER JOIN [GeneralLedger_Journal] gl
+				On tax.JournalID = gl.JournalID
+				AND Cast(gl.SysPostDateAndTime AS DATE) Between @Date1 And @Date2
+			INNER JOIN Lease_Profile lp
+				ON tax.LeaseID = lp.LeaseID
+			INNER JOIN dbo.Customer_Profile cp
+				ON cp.CustomerID = lp.CustomerID
+			INNER JOIN cte_LabelingLessor ll
+				ON tax.LeaseID = ll.LeaseID
+			-------------------------------------------------------------------------------------------------------
+			--Left Join  GeneralLedger_Entries e
+			--	On tax.JournalID = e.JournalID and tax.LeaseID = e.LeaseID
+			--WHERE CONVERT(DATE,tax.PostDate) BETWEEN @Date1 AND @Date2
+) r
+--Where	Cast(r.PostDate AS DATE) Between @Date1 And @Date2
+WHERE r.PropertyTaxAmount != 0.00
+Order By r.PostDate
+		,r.[Property Tax Bill Number]
+		,r.AccountNumber
+		,r.SequenceNumber
+--)</CommandText>
+      </Query>
+      <Fields>
+        <Field Name="LeaseID">
+          <DataField>LeaseID</DataField>
+          <rd:TypeName>System.Int32</rd:TypeName>
+        </Field>
+        <Field Name="JournalID">
+          <DataField>JournalID</DataField>
+          <rd:TypeName>System.Int64</rd:TypeName>
+        </Field>
+        <Field Name="SequenceNumber">
+          <DataField>SequenceNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="AccountNumber">
+          <DataField>AccountNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="CustomerName">
+          <DataField>CustomerName</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="PropertyTaxAmount">
+          <DataField>PropertyTaxAmount</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="Property_Tax_Bill_Number">
+          <DataField>Property Tax Bill Number</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="ReportingYear">
+          <DataField>ReportingYear</DataField>
+          <rd:TypeName>System.Int16</rd:TypeName>
+        </Field>
+        <Field Name="LabelingLessor">
+          <DataField>LabelingLessor</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="PostDate">
+          <DataField>PostDate</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Reversed">
+          <DataField>Reversed</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="ReversalJournalID">
+          <DataField>ReversalJournalID</DataField>
+          <rd:TypeName>System.Int64</rd:TypeName>
+        </Field>
+      </Fields>
+    </DataSet>
+    <DataSet Name="DataSet1">
+      <Query>
+        <DataSourceName>DataSource1</DataSourceName>
+        <QueryParameters>
+          <QueryParameter Name="@Date1">
+            <Value>=Parameters!Date1.Value</Value>
+          </QueryParameter>
+          <QueryParameter Name="@Date2">
+            <Value>=Parameters!Date2.Value</Value>
+          </QueryParameter>
+        </QueryParameters>
+        <CommandText>-- 201903189
+-- Property Tax Bill Number Report
+-- Work Order #31892
+
+-----------------------------------------------------
+---- Test Code
+--Declare @Date1 Date, @Date2 Date
+--Set @Date1 = '2/1/2019'
+--Set @Date2 = '2/28/2019'
+-----------------------------------------------------
+ --Select * From f_PropertyTaxBillNumber_20160420('1/1/2013','4/1/2016')
+-------------------------------------------------------
+-- test code
+--SELECT leaseID,Collector,* FROM dbo.PropertyTax_Assessment where leaseid=2011 AND  ReversalJournalID is NULL
+--SELECT sequencenumber FROM lease_profile WHERE leaseid=2011
+-------------------------------------------------------
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED 
+
+;
+WITH
+cte_LabelingLessor
+AS
+(
+SELECT lp.LeaseID
+      ,lp.CustomerID
+      ,lp.SequenceNumber
+	  ,fp.FundingSourceNumber --LabellingLessor
+	  ,fp.Company AS LabellingLessor
+  FROM Lease_Profile lp
+  INNER JOIN FundingSource_Profile fp
+	ON fp.FundingSourceId = lp.LabellingLessorID
+)
+Select Top 100 Percent  
+		 r.LeaseID
+		,r.JournalID 
+		,r.SequenceNumber
+		,r.AccountNumber
+		,r.CustomerName
+		,r.PropertyTaxAmount 
+		,r.[Property Tax Bill Number]
+		,r.ReportingYear
+		,r.LabellingLessor LabelingLessor
+		,r.PostDate
+		,r.Reversed
+		,r.ReversalJournalID
+		,r.TaxDistrict
+
+From
+(
+		Select   tax.LeaseID
+				,tax.JournalID 
+				--,e.LeaseSequenceNumber SequenceNumber
+				,lp.SequenceNumber
+				--,e.CustomerAccountNumber AccountNumber
+				,cp.AccountNumber
+				--,e.CustomerName
+				,cp.CustomerName
+				,tax.PropertyTaxAmount * (-1) AS PropertyTaxAmount
+				,tax.[Property Tax Bill Number]
+				,tax.ReportingYear
+				--,e.LabellingLessorName LabelingLessor
+				,ll.LabellingLessor 
+				--,Coalesce(Format(e.PostDate,'yyyy-MM-dd'),'') PostDate
+				,FORMAT(gl.SysPostDateAndTime,'yyyy-MM-dd') PostDate
+				,tax.Reversed
+				,tax.ReversalJournalID
+				, tax.TaxDistrict
+		From
+		(
+			SELECT   t.[LeaseID]
+					,t.JournalID
+					,Sum(t.Amount) PropertyTaxAmount 
+					,t.BillNumber [Property Tax Bill Number]
+					,t.ReportingYear
+					,'No' Reversed
+					,t.ReversalJournalID
+					--------------------
+					-- 20190315
+					,t.TaxDistrict
+					--------------------
+			  FROM PropertyTax_Assessment t 
+			  Where t.ReversalJournalID is NULL  
+		Group By	t.LeaseID
+				  ,t.BillNumber
+				  ,t.ReportingYear
+				  ,t.JournalID
+				  ,t.ReversalJournalID
+				  --------------------
+					-- 20190315
+					,t.TaxDistrict
+					--------------------
+		) tax
+			INNER JOIN [GeneralLedger_Journal] gl
+				On tax.JournalID = gl.JournalID
+				AND Cast(gl.SysPostDateAndTime AS DATE) Between @Date1 And @Date2
+			INNER JOIN Lease_Profile lp
+				ON tax.LeaseID = lp.LeaseID
+			INNER JOIN dbo.Customer_Profile cp
+				ON cp.CustomerID = lp.CustomerID
+			INNER JOIN cte_LabelingLessor ll
+				ON tax.LeaseID = ll.LeaseID
+			---------------------------------------------------------------
+			--Left Join GeneralLedger_Entries e
+			--	On tax.JournalID = e.JournalID and tax.LeaseID = e.LeaseID
+			--WHERE CONVERT(DATE,e.PostDate) BETWEEN @Date1 AND @Date2
+		UNION
+		Select   tax.LeaseID
+				,tax.JournalID 
+				--,e.LeaseSequenceNumber SequenceNumber
+				,lp.SequenceNumber
+				--,e.CustomerAccountNumber AccountNumber
+				,cp.AccountNumber
+				--,e.CustomerName
+				,cp.CustomerName
+				,tax.PropertyTaxAmount  AS PropertyTaxAmount
+				,tax.[Property Tax Bill Number]
+				,tax.ReportingYear
+				--,e.LabellingLessorName LabelingLessor
+				,ll.LabellingLessor 
+				--,Coalesce(Format(tax.PostDate,'yyyy-MM-dd'),'') PostDate
+				,FORMAT(gl.SysPostDateAndTime,'yyyy-MM-dd') PostDate
+				,tax.Reversed
+				,tax.ReversalJournalID
+					--------------------
+					-- 20190315
+					,tax.TaxDistrict
+					--------------------
+		From
+		(
+			SELECT   t.[LeaseID]
+					,t.ReversalJournalID JournalID
+					,Sum(t.Amount) PropertyTaxAmount 
+					,t.BillNumber [Property Tax Bill Number]
+					,t.ReportingYear
+					,t.ReversalPostDate PostDate
+					, 'Yes' Reversed
+					,t.ReversalJournalID
+				  --------------------
+					-- 20190315
+					,t.TaxDistrict
+					--------------------
+			  FROM PropertyTax_Assessment t 
+			  Where t.ReversalJournalID is NOT NULL  
+			Group By   t.LeaseID
+					  ,t.BillNumber
+					  ,t.ReportingYear
+					  ,t.JournalID
+					  ,t.ReversalJournalID
+					  ,t.ReversalPostDate 
+				  --------------------
+					-- 20190315
+					,t.TaxDistrict
+					--------------------
+		) tax
+			-------------------------------------------------------------------------------------------------------
+			INNER JOIN [GeneralLedger_Journal] gl
+				On tax.JournalID = gl.JournalID
+				AND Cast(gl.SysPostDateAndTime AS DATE) Between @Date1 And @Date2
+			INNER JOIN Lease_Profile lp
+				ON tax.LeaseID = lp.LeaseID
+			INNER JOIN dbo.Customer_Profile cp
+				ON cp.CustomerID = lp.CustomerID
+			INNER JOIN cte_LabelingLessor ll
+				ON tax.LeaseID = ll.LeaseID
+			-------------------------------------------------------------------------------------------------------
+			--Left Join  GeneralLedger_Entries e
+			--	On tax.JournalID = e.JournalID and tax.LeaseID = e.LeaseID
+			--WHERE CONVERT(DATE,tax.PostDate) BETWEEN @Date1 AND @Date2
+) r
+--Where	Cast(r.PostDate AS DATE) Between @Date1 And @Date2
+WHERE r.PropertyTaxAmount != 0.00 
+AND r.Reversed='No'
+--AND leaseID=2011
+Order By r.PostDate
+		,r.[Property Tax Bill Number]
+		,r.AccountNumber
+		,r.SequenceNumber
+--)</CommandText>
+      </Query>
+      <Fields>
+        <Field Name="LeaseID">
+          <DataField>LeaseID</DataField>
+          <rd:TypeName>System.Int32</rd:TypeName>
+        </Field>
+        <Field Name="JournalID">
+          <DataField>JournalID</DataField>
+          <rd:TypeName>System.Int64</rd:TypeName>
+        </Field>
+        <Field Name="SequenceNumber">
+          <DataField>SequenceNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="AccountNumber">
+          <DataField>AccountNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="CustomerName">
+          <DataField>CustomerName</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="PropertyTaxAmount">
+          <DataField>PropertyTaxAmount</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="Property_Tax_Bill_Number">
+          <DataField>Property Tax Bill Number</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="ReportingYear">
+          <DataField>ReportingYear</DataField>
+          <rd:TypeName>System.Int16</rd:TypeName>
+        </Field>
+        <Field Name="LabelingLessor">
+          <DataField>LabelingLessor</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="PostDate">
+          <DataField>PostDate</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Reversed">
+          <DataField>Reversed</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="ReversalJournalID">
+          <DataField>ReversalJournalID</DataField>
+          <rd:TypeName>System.Int64</rd:TypeName>
+        </Field>
+        <Field Name="TaxDistrict">
+          <DataField>TaxDistrict</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+      </Fields>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Textbox Name="textbox1">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Property Tax Bill Number Report</Value>
+                    <Style>
+                      <FontFamily>Tahoma</FontFamily>
+                      <FontSize>20pt</FontSize>
+                      <FontWeight>Bold</FontWeight>
+                      <Color>Maroon</Color>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>textbox1</rd:DefaultName>
+            <Height>0.36in</Height>
+            <Width>4.76042in</Width>
+            <Style>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Tablix Name="table1">
+            <TablixBody>
+              <TablixColumns>
+                <TablixColumn>
+                  <Width>2.125in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.30208in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.875in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>3.125in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.85417in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.70833in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.41667in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.73958in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+              </TablixColumns>
+              <TablixRows>
+                <TablixRow>
+                  <Height>0.22in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox2">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Sequence Number</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox2</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox3">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Account Number</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox3</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox4">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Customer Name</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox4</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox11">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Tax District</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox11</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox5">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Property Tax Amount</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox5</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox6">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Property Tax Bill Number</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox6</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox7">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Reporting Year</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Right</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox7</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox8">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Labelling Lessor</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox8</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox9">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Post Date</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox9</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox10">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Reversed</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox10</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.21in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="SequenceNumber">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!SequenceNumber.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>SequenceNumber</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="AccountNumber">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!AccountNumber.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>AccountNumber</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="CustomerName">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!CustomerName.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>CustomerName</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="TaxDistrict">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!TaxDistrict.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>TaxDistrict</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PropertyTaxAmount">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!PropertyTaxAmount.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <Format>'$'0.00;('$'0.00)</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PropertyTaxAmount</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Property_Tax_Bill_Number">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Property_Tax_Bill_Number.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Property_Tax_Bill_Number</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ReportingYear">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ReportingYear.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>ReportingYear</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="LabelingLessor">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!LabelingLessor.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>LabelingLessor</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="PostDate">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!PostDate.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>PostDate</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Reversed">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Reversed.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Reversed</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+              </TablixRows>
+            </TablixBody>
+            <TablixColumnHierarchy>
+              <TablixMembers>
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+              </TablixMembers>
+            </TablixColumnHierarchy>
+            <TablixRowHierarchy>
+              <TablixMembers>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <Group Name="table1_Details_Group">
+                    <DataElementName>Detail</DataElementName>
+                  </Group>
+                  <TablixMembers>
+                    <TablixMember />
+                  </TablixMembers>
+                  <DataElementName>Detail_Collection</DataElementName>
+                  <DataElementOutput>Output</DataElementOutput>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+              </TablixMembers>
+            </TablixRowHierarchy>
+            <DataSetName>DataSet1</DataSetName>
+            <Top>0.36in</Top>
+            <Height>0.43in</Height>
+            <Width>19.14583in</Width>
+            <ZIndex>1</ZIndex>
+            <Style />
+          </Tablix>
+        </ReportItems>
+        <Height>0.79in</Height>
+        <Style />
+      </Body>
+      <Width>19.14583in</Width>
+      <Page>
+        <LeftMargin>1in</LeftMargin>
+        <RightMargin>1in</RightMargin>
+        <TopMargin>1in</TopMargin>
+        <BottomMargin>1in</BottomMargin>
+        <Style />
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <ReportParameters>
+    <ReportParameter Name="Date1">
+      <DataType>DateTime</DataType>
+      <Prompt>Enter First Post Date:</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="Date2">
+      <DataType>DateTime</DataType>
+      <Prompt>Enter Second Post Date:</Prompt>
+    </ReportParameter>
+  </ReportParameters>
+  <ReportParametersLayout>
+    <GridLayoutDefinition>
+      <NumberOfColumns>2</NumberOfColumns>
+      <NumberOfRows>1</NumberOfRows>
+      <CellDefinitions>
+        <CellDefinition>
+          <ColumnIndex>0</ColumnIndex>
+          <RowIndex>0</RowIndex>
+          <ParameterName>Date1</ParameterName>
+        </CellDefinition>
+        <CellDefinition>
+          <ColumnIndex>1</ColumnIndex>
+          <RowIndex>0</RowIndex>
+          <ParameterName>Date2</ParameterName>
+        </CellDefinition>
+      </CellDefinitions>
+    </GridLayoutDefinition>
+  </ReportParametersLayout>
+  <Language>en-US</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Inch</rd:ReportUnitType>
+  <rd:ReportServerUrl>http://ssrs.insightinvestments.com/ReportServer</rd:ReportServerUrl>
+  <rd:ReportID>38267479-c222-4b4e-9106-5aaa9d4cfdf9</rd:ReportID>
+</Report>

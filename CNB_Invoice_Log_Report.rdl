@@ -1,0 +1,1783 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner" xmlns:am="http://schemas.microsoft.com/sqlserver/reporting/authoringmetadata">
+  <Description>Version: Deploy1</Description>
+  <am:AuthoringMetadata>
+    <am:CreatedBy>
+      <am:Name>SSDTRS</am:Name>
+      <am:Version>17.14.36804.6</am:Version>
+    </am:CreatedBy>
+    <am:UpdatedBy>
+      <am:Name>SSDTRS</am:Name>
+      <am:Version>17.14.36804.6</am:Version>
+    </am:UpdatedBy>
+    <am:LastModifiedTimestamp>2026-02-09T19:50:08.9691928Z</am:LastModifiedTimestamp>
+  </am:AuthoringMetadata>
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="DataSource1">
+      <DataSourceReference>LWDW</DataSourceReference>
+      <rd:SecurityType>Integrated</rd:SecurityType>
+      <rd:DataSourceID>dde90c5d-1817-4c31-909d-051921fbc40a</rd:DataSourceID>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="DataSet1">
+      <Query>
+        <DataSourceName>DataSource1</DataSourceName>
+        <QueryParameters>
+          <QueryParameter Name="@FromDate">
+            <Value>=Parameters!FromDate.Value</Value>
+          </QueryParameter>
+          <QueryParameter Name="@ToDate">
+            <Value>=Parameters!ToDate.Value</Value>
+          </QueryParameter>
+        </QueryParameters>
+        <CommandText>-- 20191008
+
+--Declare @FromDate as Date= '7/1/2021'
+--Declare @ToDate as Date= '9/1/2021'
+
+SELECT bos.vendorinvoiceid,
+       (SELECT vendorinvoicenumber
+        FROM   apinvoice_profile
+        WHERE  vendorinvoiceid = bos.vendorinvoiceid)
+       VendorInvoiceNumber,
+       bos.stateid,
+       (SELECT countryid
+        FROM   template_state_cnfg
+        WHERE  stateid = bos.stateid)
+       CountryID,
+       Isnull ((SELECT countryname
+                FROM   template_country_cnfglocale
+                WHERE  countryid = (SELECT countryid
+                                    FROM   template_state_cnfg
+                                    WHERE  stateid = bos.stateid)), '')
+       CountryName,
+       Isnull ((SELECT countryshortcode
+                FROM   template_country_cnfglocale
+                WHERE  countryid = (SELECT countryid
+                                    FROM   template_state_cnfg
+                                    WHERE  stateid = bos.stateid)), '')
+       CountryShortCode,
+       Isnull ((SELECT iso
+                FROM   currency_index
+                WHERE  countryid = (SELECT countryid
+                                    FROM   template_state_cnfg
+                                    WHERE  stateid = bos.stateid)), '') ISO,
+       Isnull ((SELECT currencyname
+                FROM   currency_index
+                WHERE  countryid = (SELECT countryid
+                                    FROM   template_state_cnfg
+                                    WHERE  stateid = bos.stateid)), '')
+       CurrencyName
+	   --,
+	   --Isnull ((SELECT Symbol
+    --            FROM   Currency_Symbol_CnfgLocale
+    --            WHERE  ISO = Currency_Symbol_CnfgLocale.ISO), '')
+       --Symbol
+INTO   #curr
+FROM   apinvoice_billofsale bos
+
+/* Begin #PAYEE*/
+SELECT crpi.vendorinvoiceid,
+       crpi.paymentid,
+       crp.payeeid
+INTO   #payee
+FROM   checkrequest_paymentinvoice crpi
+       INNER JOIN checkrequest_payment crp
+               ON crpi.paymentid = crp.paymentid
+                  AND crp.isactive = 1
+WHERE  crpi.checknumber IS NOT NULL /*-----------------------------------------------------------*/
+
+DECLARE @FilteredCofA TABLE
+  (
+     cofaid               BIGINT,
+     cofanumber           BIGINT,
+     versionid            INT,
+     isfinalcofa          BIT,
+     cnblineplacementdate DATETIME
+  )
+
+INSERT INTO @FilteredCofA
+SELECT cofaid,
+       cofanumber,
+       versionid,
+       isfinalcofa,
+       cnblineplacementdate
+FROM   cofa_profile
+WHERE  cofa_profile.isactive = 1
+       AND Cast(cofa_profile.cnblineplacementdate AS DATE) BETWEEN
+           @FromDate AND @ToDate /* 20180212*/
+OPTION (optimize FOR unknown)
+
+/*            (*/
+SELECT lease_profile.leaseid,
+       leasetransaction_profile.leasetransactionid,
+       lease_profile.lessordefineduniqueid,
+       customer_profile.accountnumber,
+       customer_profile.customername,
+       leasetransaction_profile.jarkid/* test code*/,
+       lease_profile.bookingstatusid,
+	   lease_profile.LabellingLessorID,
+       (SELECT [description]
+        FROM   [dbo].[lease_bookingstatus_cnfg]
+        WHERE  bookingstatusid = lease_profile.bookingstatusid) BookingStatus
+/*-------------------------------------------------*/
+INTO   #cte_leaselist
+FROM   lease_profile
+       INNER JOIN customer_profile
+               ON customer_profile.customerid = lease_profile.customerid
+       INNER JOIN leasetransaction_profile
+               ON leasetransaction_profile.leaseid = lease_profile.leaseid
+       INNER JOIN leasetransaction_adminstrativeinformation
+               ON leasetransaction_adminstrativeinformation.leasetransactionid =
+                             leasetransaction_profile.leasetransactionid
+                  AND
+       leasetransaction_adminstrativeinformation.isnoteligibleforwarehouseline =
+       0
+/*Consider only leases which are for CNB placement*/
+WHERE  lease_profile.statusid IN ( 2, 5 ) /* 20180212*/
+OPTION (optimize FOR unknown)
+
+/*     (*/
+SELECT cofaid,
+       cofanumber/*----------------------------------*/,
+       versionid,
+       cnblineplacementdate
+INTO   #cte_finalcofa
+FROM   @FilteredCofA
+
+/*     (  */
+SELECT Sum(checkrequest_payeeinvoice.amounttopay) [AmountToPay],
+       cofa_inventory.cofaid,
+       CofA.cofanumber/*----------------------------------------------------*/,
+       CofA.versionid,
+       apinvoice_profile.vendorid,
+       apinvoice_costheader.vendorinvoiceid,
+       apinvoice_profile.vendorinvoicenumber,
+       apinvoice_profile.isforeigncurrency
+                    /*------------------------------------------------------*/,
+       currency_symbol_cnfg.symbol
+INTO   #cte_checkrequestinvoicedetail_sum
+FROM   @FilteredCofA CofA
+       INNER JOIN cofa_inventory
+               ON cofa_inventory.cofaid = CofA.cofaid
+       INNER JOIN apinvoice_costheader
+               ON apinvoice_costheader.inventoryid = cofa_inventory.inventoryid
+                  AND apinvoice_costheader.isasset = 1 /*YES  */
+                  AND apinvoice_costheader.isactive = 1 /*YES*/
+       INNER JOIN apinvoice_profile
+               ON apinvoice_profile.vendorinvoiceid =
+                  apinvoice_costheader.vendorinvoiceid
+       INNER JOIN llc_profile
+               ON llc_profile.llcid = apinvoice_profile.vendorllcid
+       INNER JOIN currency_index
+               ON currency_index.currencyindexid = llc_profile.currencyindexid
+       INNER JOIN currency_symbol_cnfg
+               ON currency_symbol_cnfg.symbolid =
+                  currency_index.currencysymbolid
+       LEFT OUTER JOIN checkrequest_payeeinvoice
+                    ON checkrequest_payeeinvoice.vendorinvoicecostid =
+                                       apinvoice_costheader.vendorinvoicecostid
+                       AND checkrequest_payeeinvoice.isactive = 1 /*YES  */
+                       AND checkrequest_payeeinvoice.amounttopay &lt;&gt; 0
+/* Only assets which have positvie or negative AmountToPay */
+WHERE  cofa_inventory.isactive = 1
+/* Yes */
+GROUP  BY CofA.versionid,
+          cofa_inventory.cofaid,
+          CofA.cofanumber,
+          apinvoice_profile.vendorid,
+          apinvoice_costheader.vendorinvoiceid,
+          apinvoice_profile.vendorinvoicenumber,
+          apinvoice_profile.isforeigncurrency,
+          currency_symbol_cnfg.symbol
+
+/*     (  */
+SELECT Sum(checkrequest_payeeinvoice.amounttopay) [AmountToPay],
+       cofa_inventory.cofaid,
+       CofA.cofanumber,
+       CofA.versionid,
+       apinvoice_profile.vendorid,
+       apinvoice_profile.vendorinvoiceid,
+       apinvoice_profile.vendorinvoicenumber,
+       apinvoice_profile.isforeigncurrency,
+       currency_symbol_cnfg.symbol
+INTO   #cte_checkrequestinvoicedetail_cofa
+FROM   @FilteredCofA CofA
+       INNER JOIN cofa_inventory
+               ON cofa_inventory.cofaid = CofA.cofaid
+                  AND cofa_inventory.isactive = 1 /* Yes */
+       INNER JOIN apinvoice_costheader
+               ON apinvoice_costheader.inventoryid = cofa_inventory.inventoryid
+                  AND apinvoice_costheader.isasset = 1 /*YES  */
+                  AND apinvoice_costheader.isactive = 1 /*YES*/
+       INNER JOIN apinvoice_profile
+               ON apinvoice_profile.vendorinvoiceid =
+                  apinvoice_costheader.vendorinvoiceid
+       INNER JOIN llc_profile
+               ON llc_profile.llcid = apinvoice_profile.vendorllcid
+       INNER JOIN currency_index
+               ON currency_index.currencyindexid = llc_profile.currencyindexid
+       INNER JOIN currency_symbol_cnfg
+               ON currency_symbol_cnfg.symbolid =
+                  currency_index.currencysymbolid
+       INNER JOIN checkrequest_payeeinvoice
+               ON checkrequest_payeeinvoice.vendorinvoicecostid =
+                             apinvoice_costheader.vendorinvoicecostid
+                  AND checkrequest_payeeinvoice.isactive = 1 /*YES  */
+                  AND checkrequest_payeeinvoice.amounttopay &lt;&gt; 0
+/* Only assets which have positvie or negative AmountToPay*/
+GROUP  BY CofA.versionid,
+          cofa_inventory.cofaid,
+          CofA.cofanumber,
+          apinvoice_profile.vendorid,
+          apinvoice_profile.vendorinvoiceid,
+          apinvoice_profile.vendorinvoicenumber,
+          apinvoice_profile.isforeigncurrency,
+          currency_symbol_cnfg.symbol
+
+/*     (  */
+SELECT Sum(checkrequest_payeeinvoice.amounttopay) [AmountToPay],
+       cofa_inventory.cofaid,
+       CofA.cofanumber,
+       CofA.versionid,
+       apinvoice_profile.vendorid,
+       apinvoice_profile.vendorinvoiceid,
+       apinvoice_profile.vendorinvoicenumber,
+       apinvoice_profile.isforeigncurrency,
+       currency_symbol_cnfg.symbol
+INTO   #cte_checkrequestinvoicedetail_no_cofa
+FROM   @FilteredCofA CofA
+       INNER JOIN cofa_inventory
+               ON cofa_inventory.cofaid = CofA.cofaid
+                  AND cofa_inventory.isactive = 1 /* Yes */
+       INNER JOIN apinvoice_costheader
+               ON apinvoice_costheader.inventoryid = cofa_inventory.inventoryid
+       INNER JOIN apinvoice_profile
+               ON apinvoice_profile.vendorinvoiceid =
+                  apinvoice_costheader.vendorinvoiceid
+       INNER JOIN llc_profile
+               ON llc_profile.llcid = apinvoice_profile.vendorllcid
+       INNER JOIN currency_index
+               ON currency_index.currencyindexid = llc_profile.currencyindexid
+       INNER JOIN currency_symbol_cnfg
+               ON currency_symbol_cnfg.symbolid =
+                  currency_index.currencysymbolid
+       LEFT OUTER JOIN checkrequest_payeeinvoice
+                    ON checkrequest_payeeinvoice.vendorinvoicecostid =
+                                       apinvoice_costheader.vendorinvoicecostid
+                       AND checkrequest_payeeinvoice.isactive = 1 /*YES  */
+                       AND checkrequest_payeeinvoice.amounttopay &lt;&gt; 0
+/* Only assets which have positvie or negative AmountToPay */
+WHERE  apinvoice_costheader.isactive = 1
+/*YES*/
+GROUP  BY CofA.versionid,
+          cofa_inventory.cofaid,
+          CofA.cofanumber,
+          apinvoice_profile.vendorid,
+          apinvoice_profile.vendorinvoiceid,
+          apinvoice_profile.vendorinvoicenumber,
+          apinvoice_profile.isforeigncurrency,
+          currency_symbol_cnfg.symbol
+
+/*
+(*/
+SELECT Sum(amounttopay) AmountToPay,
+       vendorinvoicenumber
+INTO   #cte_sum_cofa
+FROM   #cte_checkrequestinvoicedetail_no_cofa
+GROUP  BY vendorinvoicenumber
+
+/*     (*/
+SELECT COALESCE (#cte_sum_cofa.amounttopay, 0) AmountToPay,
+       s.cofaid,
+       s.cofanumber,
+       s.versionid,
+       s.vendorid,
+       s.vendorinvoiceid,
+       s.vendorinvoicenumber,
+       s.isforeigncurrency,
+       s.symbol
+INTO   #cte_checkrequestinvoicedetail
+FROM   #cte_checkrequestinvoicedetail_cofa s
+       LEFT JOIN #cte_sum_cofa
+              ON s.vendorinvoicenumber = #cte_sum_cofa.vendorinvoicenumber
+
+/*
+(*/
+SELECT DISTINCT employeeassignment_entity.entityid
+INTO   #cte_leaseleveladmin
+FROM   security_userprofile
+       INNER JOIN employeeassignment_entity
+               ON employeeassignment_entity.userid = security_userprofile.userid
+                  AND employeeassignment_entity.entitytypeid = 5 /*Lease */
+                  AND employeeassignment_entity.rolefunctionid = 38
+       /*-----------------------------------------------------------------------------------------------*/
+                  AND employeeassignment_entity.isactive = 1 /* 20180212*/
+OPTION (optimize FOR unknown)
+
+/*     (*/
+SELECT #cte_leaselist.accountnumber        [Lessee],
+       #cte_leaselist.customername,
+	   #cte_leaselist.LabellingLessorID,
+       #cte_checkrequestinvoicedetail.cofanumber,
+       #cte_checkrequestinvoicedetail.vendorinvoicenumber,
+       vendor_profile.vendorid,
+       #cte_checkrequestinvoicedetail.isforeigncurrency,
+       apinvoice_billofsale.vendorinvoiceid
+                  /*----------------------------------*/,
+       #cte_leaselist.lessordefineduniqueid[ScheduleNumber],
+       #cte_finalcofa.cnblineplacementdate,
+       #cte_checkrequestinvoicedetail.amounttopay,
+       #cte_checkrequestinvoicedetail.symbol,
+       apinvoice_billofsale.invoicedate,
+       apinvoice_billofsale.invoiceduedate,
+       vendor_profile.vendorcompanyname/* test code*/,
+       #cte_finalcofa.versionid,
+       #cte_leaselist.leasetransactionid
+/*-------------------------------------                    */
+INTO   #cte_finalresult
+FROM   #cte_leaselist /*FULL*/
+       INNER JOIN #cte_finalcofa
+               ON #cte_finalcofa.versionid = #cte_leaselist.leasetransactionid
+       LEFT OUTER JOIN #cte_checkrequestinvoicedetail
+                    ON #cte_checkrequestinvoicedetail.cofaid =
+                       #cte_finalcofa.cofaid
+                       AND #cte_checkrequestinvoicedetail.versionid =
+                           #cte_finalcofa.versionid
+       LEFT OUTER JOIN apinvoice_billofsale
+                    ON apinvoice_billofsale.vendorinvoiceid =
+                       #cte_checkrequestinvoicedetail.vendorinvoiceid
+       LEFT OUTER JOIN vendor_profile
+                    ON vendor_profile.vendorid =
+                       #cte_checkrequestinvoicedetail.vendorid
+       LEFT OUTER JOIN #cte_leaseleveladmin
+                    ON #cte_leaseleveladmin.entityid = #cte_leaselist.leaseid
+       LEFT OUTER JOIN discountloan_deal
+                    ON discountloan_deal.entityid = #cte_leaselist.leaseid
+       LEFT OUTER JOIN discountloan_fundingsourcedetail
+                    ON discountloan_deal.discountloanid =
+discountloan_fundingsourcedetail.discountloanid
+AND discountloan_fundingsourcedetail.isrecourseavailable = 0
+WHERE  ( ( discountloan_deal.isactive IS NULL
+            OR ( discountloan_deal.isactive = 0
+                 AND discountloan_deal.deactivatedreasonid != 4 ) )
+          OR (( discountloan_deal.isactive = 1
+                 OR ( discountloan_deal.isactive = 0
+                      AND discountloan_deal.deactivatedreasonid = 4 ) )
+             /*Consider fully amortized */) )
+
+/* Begin #O*/
+SELECT DISTINCT #cte_finalresult.lessee,
+                #cte_finalresult.customername,
+                #cte_finalresult.cofanumber,
+                #cte_finalresult.vendorid,
+                #cte_finalresult.isforeigncurrency,
+                #cte_finalresult.vendorinvoiceid,
+                #cte_finalresult.schedulenumber,
+                #cte_finalresult.cnblineplacementdate,
+                #cte_finalresult.symbol,
+                Isnull(#cte_finalresult.amounttopay, 0) AmountToPay,
+                #cte_finalresult.invoicedate,
+                #cte_finalresult.invoiceduedate,
+                #cte_finalresult.vendorcompanyname,
+                #cte_finalresult.vendorinvoicenumber,
+                cri.checkrequestid,
+                crpi.checknumber,
+                crpi.checkdate,
+                PAYEE.payeeid,
+                CURR.currencyname,
+				CURR.ISO,
+				#cte_finalresult.LabellingLessorID,
+				fs.Company,
+				fs.FundingSourceId,
+				fs.FundingSourceNumber,
+				fs.Alias
+INTO   #o
+FROM   #cte_finalresult
+       LEFT JOIN checkrequest_invoice cri
+              ON #cte_finalresult.vendorinvoiceid = cri.vendorinvoiceid
+       LEFT JOIN checkrequest_paymentinvoice crpi
+              ON #cte_finalresult.vendorinvoiceid = crpi.vendorinvoiceid
+                 AND crpi.isactive = 1 /* 20180426*/
+       LEFT JOIN #payee PAYEE
+              ON #cte_finalresult.vendorinvoiceid = PAYEE.vendorinvoiceid
+       /* 20180426*/
+       LEFT JOIN #curr CURR
+              ON #cte_finalresult.vendorinvoiceid = CURR.vendorinvoiceid
+	   LEFT JOIN FundingSource_Profile fs
+      		  ON #cte_finalresult.LabellingLessorID = fs.FundingSourceID
+       AND  fs.TypeID IN ( 1, 7)   --Lessor, Private Label
+
+/* Begin #Z*/
+SELECT O.lessee                                       [Cust ID],
+       O.customername                                 [Lessee Name],
+       O.schedulenumber,
+       Isnull(CONVERT(VARCHAR(10), O.cofanumber), '') [CofA Number],
+       Cast(O.cnblineplacementdate AS DATE)           [CNB Placement Date],
+       O.vendorinvoiceid,
+       crp.payeeid,
+       vp2.vendorcompanyname                          Payee,
+       O.invoicedate,
+       CASE CONVERT(CHAR(1), o.isforeigncurrency)
+         WHEN '0' THEN O.amounttopay
+         WHEN '1' THEN crfc.amount
+         ELSE 0
+       END                                            AmountToPay
+                     /* (Yes, else No)*/,
+       O.checknumber/* CheckRequest_PaymentInvoice.CheckNumber*/,
+       O.checkdate,
+	   O.ISO,
+	   O.Symbol,
+	   o.LabellingLessorID,
+	   o.Company,
+	   o.FundingSourceId,
+	   o.FundingSourceNumber,
+	   o.Alias
+/* 20180426*/
+INTO   #z
+FROM   #o O
+       LEFT JOIN checkrequest_foreigncurrency crfc
+              ON O.checkrequestid = crfc.checkrequestid
+                 AND crfc.[description] = 'Invoice Amount'
+       LEFT JOIN vendor_profile vp
+              ON O.payeeid = vp.vendorid
+       LEFT JOIN checkrequest_payment crp
+       /* Select * from CheckRequest_Payment*/
+              ON O.checkrequestid = crp.checkrequestid
+       /*--------------------------------------*/
+       LEFT JOIN vendor_profile vp2 /* select * From Vendor_Profile*/
+              ON crp.payeeid = vp2.vendorid
+WHERE  O.vendorinvoiceid IS NOT NULL
+       /* 20180212*/
+       AND crp.isactive = 1
+
+/* Begin #ZZ*/
+SELECT Z.[lessee name],
+       Z.schedulenumber,
+       Z.[cnb placement date],
+       Z.payee,
+       z.payeeid,
+       Sum(Z.amounttopay) AmountToPay,
+       Z.vendorinvoiceid,
+       Z.invoicedate
+	   ,
+	   Z.ISO,
+	   Z.Symbol,
+	   Z.LabellingLessorID,
+	   Z.Company,
+	   Z.FundingSourceId,
+	   Z.FundingSourceNumber,
+	   Z.Alias
+/* 20180426*/
+INTO   #zz
+FROM   #z Z
+GROUP  BY Z.[lessee name],
+          Z.schedulenumber,
+          Z.[cnb placement date],
+          Z.payee,
+          z.payeeid,
+          Z.vendorinvoiceid,
+          Z.invoicedate,
+		  z.ISO,
+		  z.Symbol,
+		  Z.LabellingLessorID,
+	      Z.Company,
+	      Z.FundingSourceId,
+	      Z.FundingSourceNumber,
+		  Z.Alias
+
+/* Begin #ZZZ*/
+SELECT ZZ.[lessee name],
+       ZZ.schedulenumber,
+       ZZ.[cnb placement date],
+       ZZ.payee,
+       zz.payeeid,
+       Sum(ZZ.amounttopay)  AmountToPay_old,
+       Sum(AMT.amounttopay) AmountToPay_new,
+       ZZ.invoicedate/* 20180323 grouping change*/,
+       AMT.vendorinvoiceid  AMT_VendorInvoiceID,
+       zz.vendorinvoiceid
+	   ,
+	   ZZ.ISO,
+	   ZZ.Symbol,
+	   ZZ.LabellingLessorID,
+	   ZZ.Company,
+	   ZZ.FundingSourceId,
+	   ZZ.FundingSourceNumber,
+	   ZZ.Alias
+/* 20180426*/
+INTO   #zzz
+FROM   #zz ZZ
+       INNER JOIN (SELECT i.vendorinvoiceid,
+                          Sum(p.[amounttopay]) [AmountToPay]
+                   FROM   [checkrequest_payeeinvoice] p
+                          INNER JOIN [checkrequest_invoice] i
+                                  ON p.checkrequestinvoiceid =
+                                     i.checkrequestinvoiceid
+                  /* 20180426*/
+                   WHERE  p.isactive = 1
+                  /*------------------*/
+                   GROUP  BY i.vendorinvoiceid) AMT
+               ON ZZ.vendorinvoiceid = AMT.vendorinvoiceid
+GROUP  BY ZZ.[lessee name],
+          ZZ.schedulenumber,
+          ZZ.[cnb placement date],
+          ZZ.payee,
+          zz.payeeid,
+          ZZ.invoicedate/* 20180323 grouping change*/,
+          zz.vendorinvoiceid,
+          zz.ISO,
+		  zz.Symbol,
+		  Zz.LabellingLessorID,
+	      Zz.Company,
+	      Zz.FundingSourceId,
+	      Zz.FundingSourceNumber,
+		  Zz.Alias,
+		  AMT.vendorinvoiceid/* 20180323 grouping change*/;
+
+
+WITH cte_zzz
+     AS (/*==================================================*/ SELECT
+        ZZZ.[lessee name],
+        ZZZ.schedulenumber,
+        Format(ZZZ.[cnb placement date], 'yyyy-MM-dd')  [CNB Placement Date],
+        ZZZ.payee,
+        zzz.payeeid,
+		ZZZ.ISO,
+		ZZZ.Symbol,
+		ZZZ.LabellingLessorID,
+	    ZZZ.Company,
+	    ZZZ.FundingSourceId,
+	    ZZZ.FundingSourceNumber,
+		ZZZ.Alias,
+        Sum(ZZZ.amounttopay_old)                        AmountToPay_old,
+        Sum(ZZZ.amounttopay_new)                        AmountToPay_new,
+        Iif(Format(Min(ZZZ.invoicedate), 'yyyy-MM-dd') =
+            Format(Max(ZZZ.invoicedate), 'yyyy-MM-dd'),
+        Format(Max(ZZZ.invoicedate), 'yyyy-MM-dd'), (
+        Format(Min(ZZZ.invoicedate), 'yyyy-MM-dd')
+        + ' to '
+        + Format(Max(ZZZ.invoicedate), 'yyyy-MM-dd') )) [InvoiceDate(s)]
+           /* 20180323 grouping change*/,
+        zzz.amt_vendorinvoiceid,
+        zzz.vendorinvoiceid
+        /* 20180426*/
+         FROM   #zzz ZZZ
+         GROUP  BY ZZZ.[lessee name],
+                   ZZZ.schedulenumber,
+                   ZZZ.[cnb placement date],
+                   ZZZ.payee,
+                   zzz.payeeid/* 20180323 grouping change*/,
+                   zzz.amt_vendorinvoiceid,
+                   zzz.vendorinvoiceid
+				   ,ZZZ.ISO
+				   ,ZZZ.Symbol
+				   ,ZZZ.LabellingLessorID
+				   ,ZZZ.Company
+				   ,ZZZ.FundingSourceId
+				   ,ZZZ.FundingSourceNumber
+				   ,ZZZ.Alias
+				   
+     /*=============================================================================*/),
+     cte_union
+     AS (SELECT lil.sequencenumber,
+                ap.[vendorinvoiceid],
+                Sum(ap.[assetamount]) AssetAmount
+         FROM   [dbo].[apinvoice_costheader] ap
+                INNER JOIN (SELECT i.[inventoryid],
+                                   (SELECT sequencenumber
+                                    FROM   lease_profile
+                                    WHERE  [leaseid] = i.leaseid) SequenceNumber
+                            FROM   [dbo].[lease_inventoryinlease] i
+                            WHERE  inventoryid IN
+                                   (SELECT [inventoryid]
+                                    FROM   [dbo].[apinvoice_costheader])
+                                   AND i.isinlease = 1) lil
+                        ON ap.inventoryid = lil.inventoryid
+         WHERE  vendorinvoiceid = 54992
+         GROUP  BY lil.sequencenumber,
+                   ap.[vendorinvoiceid])
+/*----------------------------------------------------------------------------*/
+,
+     cte_zzzz
+     AS (SELECT cte_zzz.[lessee name],
+                cte_zzz.schedulenumber,
+                cte_zzz.[cnb placement date],
+                cte_zzz.payee,
+                cte_zzz.payeeid,
+				cte_zzz.ISO,
+				cte_zzz.Symbol,
+				cte_zzz.LabellingLessorID,
+				cte_zzz.Company,
+				cte_zzz.FundingSourceId,
+				cte_zzz.FundingSourceNumber,
+				cte_zzz.Alias,
+                Sum(cte_zzz.amounttopay_old)  AmountToPay_old,
+                Sum(cte_zzz.amounttopay_new)  AmountToPay_new,
+                Min(cte_zzz.[invoicedate(s)]) minInvoiceDate,
+                Max(cte_zzz.[invoicedate(s)]) maxInvoiceDate
+         FROM   cte_zzz
+/* 20180323 filter out Vendor Invoices that span multiple Lease schedule*/
+         WHERE  cte_zzz.vendorinvoiceid IN (SELECT cte_zzz.vendorinvoiceid
+                                            FROM   cte_zzz
+                                            GROUP  BY cte_zzz.vendorinvoiceid
+                                            HAVING
+                Count(cte_zzz.vendorinvoiceid) = 1
+                                           )
+         GROUP  BY cte_zzz.[lessee name],
+                   cte_zzz.schedulenumber,
+                   cte_zzz.[cnb placement date],
+                   cte_zzz.payee,
+                   cte_zzz.payeeid
+				   ,cte_zzz.ISO
+				   ,cte_zzz.Symbol
+				   ,cte_zzz.LabellingLessorID,
+					cte_zzz.Company,
+					cte_zzz.FundingSourceId,
+					cte_zzz.FundingSourceNumber,
+					cte_zzz.Alias
+				),
+     cte_zzzzz
+     AS (SELECT cte_zzz.[lessee name],
+                cte_zzz.schedulenumber,
+                cte_zzz.[cnb placement date],
+                cte_zzz.payee,
+                cte_zzz.payeeid,
+				cte_zzz.ISO,
+				cte_zzz.Symbol,
+				cte_zzz.LabellingLessorID,
+				cte_zzz.Company,
+				cte_zzz.FundingSourceId,
+				cte_zzz.FundingSourceNumber,
+				cte_zzz.Alias,
+                Sum(cte_zzz.amounttopay_old)  AmountToPay_old,
+                u.assetamount                 AmountToPay_new,
+                Min(cte_zzz.[invoicedate(s)]) minInvoiceDate,
+                Max(cte_zzz.[invoicedate(s)]) maxInvoiceDate
+         FROM   cte_zzz
+/*-----------------------------------------------------------------------*/
+                INNER JOIN cte_union u
+                        ON cte_zzz.schedulenumber = u.sequencenumber
+/* 20180323 filter out Vendor Invoices that span multiple Lease schedule*/
+         WHERE  cte_zzz.vendorinvoiceid IN (SELECT cte_zzz.vendorinvoiceid
+                                            FROM   cte_zzz
+                                            GROUP  BY cte_zzz.vendorinvoiceid
+                                            HAVING
+                Count(cte_zzz.vendorinvoiceid) &gt;= 1)
+         GROUP  BY cte_zzz.[lessee name],
+                   cte_zzz.schedulenumber,
+                   cte_zzz.[cnb placement date],
+                   cte_zzz.payee,
+                   cte_zzz.payeeid,
+                   u.assetamount
+				   ,cte_zzz.ISO
+				   ,cte_zzz.Symbol
+				  ,cte_zzz.LabellingLessorID,
+				cte_zzz.Company,
+				cte_zzz.FundingSourceId,
+				cte_zzz.FundingSourceNumber,
+				cte_zzz.Alias
+				)
+/* 20180323 revised output*/ SELECT DISTINCT y.[lessee name],
+                y.schedulenumber,
+                y.[cnb placement date],
+                y.payee,
+                y.payeeid,
+				y.ISO,
+				y.Symbol,
+				y.LabellingLessorID,
+				y.Company,
+				y.FundingSourceId,
+				y.FundingSourceNumber,
+				y.Alias,
+                Sum(y.amounttopay_old) AmountToPay_old,
+                Sum(y.amounttopay_new) AmountToPay_new,
+                Iif(Min(y.mininvoicedate) = Max(y.maxinvoicedate),
+                Max(y.maxinvoicedate),
+                Min(y.mininvoicedate) + ' to '
+                + Max(
+                y.maxinvoicedate))     [InvoiceDate(s)]
+FROM   (SELECT zzzz.[lessee name],
+               zzzz.schedulenumber,
+               zzzz.[cnb placement date],
+               zzzz.payee,
+               zzzz.payeeid,
+			   zzzz.ISO,
+			   zzzz.Symbol,
+			   zzzz.LabellingLessorID,
+			   zzzz.Company,
+			   zzzz.FundingSourceId,
+			   zzzz.FundingSourceNumber,
+			   zzzz.Alias,
+               0 AmountToPay_old,
+               zzzz.amounttopay_new,
+               zzzz.mininvoicedate,
+               zzzz.maxinvoicedate
+        FROM   cte_zzzz zzzz
+        UNION
+        SELECT zzzzz.[lessee name],
+               zzzzz.schedulenumber,
+               zzzzz.[cnb placement date],
+               zzzzz.payee,
+               zzzzz.payeeid,
+			   zzzzz.ISO,
+			   zzzzz.Symbol,
+			   zzzzz.LabellingLessorID,
+			   zzzzz.Company,
+			   zzzzz.FundingSourceId,
+			   zzzzz.FundingSourceNumber,
+			   zzzzz.Alias,
+               0 AmountToPay_old,
+               zzzzz.amounttopay_new,
+               zzzzz.mininvoicedate,
+               zzzzz.maxinvoicedate
+        FROM   cte_zzzzz zzzzz) y
+GROUP  BY y.[lessee name],
+          y.schedulenumber,
+          y.[cnb placement date],
+          y.payee,
+          y.payeeid,
+				y.ISO,
+				y.Symbol,
+				y.LabellingLessorID,
+				y.Company,
+				y.FundingSourceId,
+				y.FundingSourceNumber,
+				y.Alias
+ORDER  BY y.payee,
+          y.schedulenumber
+
+/*--------------------------------------------------------------------------*/
+DROP TABLE #cte_leaselist
+
+DROP TABLE #cte_finalcofa
+
+DROP TABLE #cte_checkrequestinvoicedetail_sum
+
+DROP TABLE #cte_checkrequestinvoicedetail_cofa
+
+DROP TABLE #cte_checkrequestinvoicedetail_no_cofa
+
+DROP TABLE #cte_sum_cofa
+
+DROP TABLE #cte_checkrequestinvoicedetail
+
+DROP TABLE #cte_leaseleveladmin
+
+DROP TABLE #cte_finalresult
+
+/* 20180426*/
+DROP TABLE #curr
+
+DROP TABLE #payee
+
+DROP TABLE #o
+
+DROP TABLE #z
+
+DROP TABLE #zz
+
+DROP TABLE #zzz </CommandText>
+      </Query>
+      <Fields>
+        <Field Name="Lessee_Name">
+          <DataField>lessee name</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="ScheduleNumber">
+          <DataField>schedulenumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="CNB_Placement_Date">
+          <DataField>cnb placement date</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Payee">
+          <DataField>payee</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="PayeeID">
+          <DataField>payeeid</DataField>
+          <rd:TypeName>System.Int32</rd:TypeName>
+        </Field>
+        <Field Name="ISO">
+          <DataField>ISO</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="AmountToPay_old">
+          <DataField>AmountToPay_old</DataField>
+          <rd:TypeName>System.Int32</rd:TypeName>
+        </Field>
+        <Field Name="Symbol">
+          <DataField>Symbol</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="LabellingLessorID">
+          <DataField>LabellingLessorID</DataField>
+          <rd:TypeName>System.Int32</rd:TypeName>
+        </Field>
+        <Field Name="Company">
+          <DataField>Company</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="AmountToPay_new">
+          <DataField>AmountToPay_new</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="FundingSourceId">
+          <DataField>FundingSourceId</DataField>
+          <rd:TypeName>System.Int32</rd:TypeName>
+        </Field>
+        <Field Name="Alias">
+          <DataField>Alias</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="InvoiceDate_s_">
+          <DataField>InvoiceDate(s)</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="FundingSourceNumber">
+          <DataField>FundingSourceNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+      </Fields>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Textbox Name="textbox1">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>CNB Invoice Log Report</Value>
+                    <Style>
+                      <FontFamily>Tahoma</FontFamily>
+                      <FontSize>20pt</FontSize>
+                      <FontWeight>Bold</FontWeight>
+                      <Color>SteelBlue</Color>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value />
+                    <Style>
+                      <FontFamily>Tahoma</FontFamily>
+                      <FontWeight>Bold</FontWeight>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Run Date:</Value>
+                    <Style>
+                      <FontFamily>Tahoma</FontFamily>
+                      <FontWeight>Bold</FontWeight>
+                    </Style>
+                  </TextRun>
+                  <TextRun>
+                    <Value xml:space="preserve">  </Value>
+                    <Style>
+                      <FontFamily>Tahoma</FontFamily>
+                    </Style>
+                  </TextRun>
+                  <TextRun>
+                    <Value>=NOW()</Value>
+                    <Style>
+                      <FontFamily>Tahoma</FontFamily>
+                    </Style>
+                  </TextRun>
+                  <TextRun>
+                    <Value xml:space="preserve">      </Value>
+                    <Style>
+                      <FontFamily>Tahoma</FontFamily>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value />
+                    <Style>
+                      <FontFamily>Tahoma</FontFamily>
+                      <FontWeight>Bold</FontWeight>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Filter:</Value>
+                    <Style>
+                      <FontWeight>Bold</FontWeight>
+                    </Style>
+                  </TextRun>
+                  <TextRun>
+                    <Value xml:space="preserve">  </Value>
+                    <Style />
+                  </TextRun>
+                  <TextRun>
+                    <Value>CNB Line Placement Date</Value>
+                    <Style>
+                      <FontStyle>Normal</FontStyle>
+                      <FontFamily>Times New Roman</FontFamily>
+                      <FontSize>12pt</FontSize>
+                      <FontWeight>Normal</FontWeight>
+                      <TextDecoration>None</TextDecoration>
+                      <Color>#000000</Color>
+                    </Style>
+                  </TextRun>
+                  <TextRun>
+                    <Value> between </Value>
+                    <Style />
+                  </TextRun>
+                  <TextRun>
+                    <Value>=Parameters!FromDate.Value</Value>
+                    <Style />
+                  </TextRun>
+                  <TextRun>
+                    <Value> and </Value>
+                    <Style />
+                  </TextRun>
+                  <TextRun>
+                    <Value>=Parameters!ToDate.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>textbox1</rd:DefaultName>
+            <Height>0.93986in</Height>
+            <Width>6.4375in</Width>
+            <Style>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Tablix Name="table1">
+            <TablixBody>
+              <TablixColumns>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.70833in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.72917in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.70833in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>0.51042in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>3.25in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.1875in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.86458in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.75in</Width>
+                </TablixColumn>
+              </TablixColumns>
+              <TablixRows>
+                <TablixRow>
+                  <Height>0.24257in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox6">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Labelling Lessor Code</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox6</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox7">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Labelling Lessor Alias</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox7</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox10">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Payee</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox10</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox12">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Amount To Pay </Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox12</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <RightBorder>
+                              <Style>None</Style>
+                            </RightBorder>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox8">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value />
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox8</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <LeftBorder>
+                              <Style>None</Style>
+                            </LeftBorder>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox2">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Lessee Name</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox2</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox3">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Schedule Number</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox3</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox4">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>CNB Placement Date</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox4</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="textbox9">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Invoice Date s </Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>textbox9</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>SteelBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.23257in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="FundingSourceNumber">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!FundingSourceNumber.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>FundingSourceNumber</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Alias">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Alias.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Alias</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Payee1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Payee.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Payee1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="AmountToPay_new1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!AmountToPay_new.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <Format>'$'0.00;('$'0.00)</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>AmountToPay_new1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <RightBorder>
+                              <Style>None</Style>
+                            </RightBorder>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                            <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ISO">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ISO.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>ISO</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <LeftBorder>
+                              <Style>None</Style>
+                            </LeftBorder>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Lessee_Name">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Lessee_Name.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Lessee_Name</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ScheduleNumber">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ScheduleNumber.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>ScheduleNumber</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="CNB_Placement_Date">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!CNB_Placement_Date.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                    <Format>d</Format>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>CNB_Placement_Date</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="InvoiceDate_s_">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!InvoiceDate_s_.Value</Value>
+                                  <Style>
+                                    <FontFamily>Tahoma</FontFamily>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>InvoiceDate_s_</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+              </TablixRows>
+            </TablixBody>
+            <TablixColumnHierarchy>
+              <TablixMembers>
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+              </TablixMembers>
+            </TablixColumnHierarchy>
+            <TablixRowHierarchy>
+              <TablixMembers>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <Group Name="table1_Details_Group">
+                    <DataElementName>Detail</DataElementName>
+                  </Group>
+                  <TablixMembers>
+                    <TablixMember />
+                  </TablixMembers>
+                  <DataElementName>Detail_Collection</DataElementName>
+                  <DataElementOutput>Output</DataElementOutput>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+              </TablixMembers>
+            </TablixRowHierarchy>
+            <DataSetName>DataSet1</DataSetName>
+            <Top>0.98153in</Top>
+            <Height>0.47514in</Height>
+            <Width>17.70833in</Width>
+            <ZIndex>1</ZIndex>
+            <Style />
+          </Tablix>
+        </ReportItems>
+        <Height>1.45667in</Height>
+        <Style />
+      </Body>
+      <Width>17.70833in</Width>
+      <Page>
+        <PageFooter>
+          <Height>0.53125in</Height>
+          <PrintOnFirstPage>true</PrintOnFirstPage>
+          <PrintOnLastPage>true</PrintOnLastPage>
+          <ReportItems>
+            <Textbox Name="Textbox5">
+              <CanGrow>true</CanGrow>
+              <KeepTogether>true</KeepTogether>
+              <Paragraphs>
+                <Paragraph>
+                  <TextRuns>
+                    <TextRun>
+                      <Value>Page: </Value>
+                      <Style>
+                        <FontWeight>Bold</FontWeight>
+                      </Style>
+                    </TextRun>
+                    <TextRun>
+                      <Value>=Globals!PageNumber</Value>
+                      <Style>
+                        <FontWeight>Bold</FontWeight>
+                      </Style>
+                    </TextRun>
+                  </TextRuns>
+                  <Style />
+                </Paragraph>
+              </Paragraphs>
+              <rd:DefaultName>Textbox5</rd:DefaultName>
+              <Top>0.16708in</Top>
+              <Height>0.25in</Height>
+              <Width>1.84375in</Width>
+              <Style>
+                <Border>
+                  <Style>None</Style>
+                </Border>
+                <PaddingLeft>2pt</PaddingLeft>
+                <PaddingRight>2pt</PaddingRight>
+                <PaddingTop>2pt</PaddingTop>
+                <PaddingBottom>2pt</PaddingBottom>
+              </Style>
+            </Textbox>
+          </ReportItems>
+          <Style>
+            <Border>
+              <Style>None</Style>
+            </Border>
+          </Style>
+        </PageFooter>
+        <LeftMargin>1in</LeftMargin>
+        <RightMargin>1in</RightMargin>
+        <TopMargin>1in</TopMargin>
+        <BottomMargin>1in</BottomMargin>
+        <Style />
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <ReportParameters>
+    <ReportParameter Name="FromDate">
+      <DataType>DateTime</DataType>
+      <Prompt>From Date</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="ToDate">
+      <DataType>DateTime</DataType>
+      <Prompt>To Date</Prompt>
+    </ReportParameter>
+  </ReportParameters>
+  <ReportParametersLayout>
+    <GridLayoutDefinition>
+      <NumberOfColumns>2</NumberOfColumns>
+      <NumberOfRows>1</NumberOfRows>
+      <CellDefinitions>
+        <CellDefinition>
+          <ColumnIndex>0</ColumnIndex>
+          <RowIndex>0</RowIndex>
+          <ParameterName>FromDate</ParameterName>
+        </CellDefinition>
+        <CellDefinition>
+          <ColumnIndex>1</ColumnIndex>
+          <RowIndex>0</RowIndex>
+          <ParameterName>ToDate</ParameterName>
+        </CellDefinition>
+      </CellDefinitions>
+    </GridLayoutDefinition>
+  </ReportParametersLayout>
+  <Language>en-US</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Inch</rd:ReportUnitType>
+  <rd:ReportServerUrl>https://corpsmap20.insightinvestments.com/ReportServer</rd:ReportServerUrl>
+  <rd:ReportID>bc7614dd-3510-4c3e-bf0d-66ad6a2948d6</rd:ReportID>
+</Report>

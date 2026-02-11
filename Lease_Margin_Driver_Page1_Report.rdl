@@ -1,0 +1,2514 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Report xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner" xmlns:am="http://schemas.microsoft.com/sqlserver/reporting/authoringmetadata">
+  <Description>Version 20220413</Description>
+  <am:AuthoringMetadata>
+    <am:CreatedBy>
+      <am:Name>SSDTRS</am:Name>
+      <am:Version>17.14.36804.6</am:Version>
+    </am:CreatedBy>
+    <am:UpdatedBy>
+      <am:Name>SSDTRS</am:Name>
+      <am:Version>17.14.36804.6</am:Version>
+    </am:UpdatedBy>
+    <am:LastModifiedTimestamp>2026-02-09T22:10:11.0571818Z</am:LastModifiedTimestamp>
+  </am:AuthoringMetadata>
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="Insight_DEV">
+      <DataSourceReference>LWDW</DataSourceReference>
+      <rd:SecurityType>Integrated</rd:SecurityType>
+      <rd:DataSourceID>de76ac84-6b89-454a-8b6d-4f51f64e2d31</rd:DataSourceID>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="Lease_Details">
+      <Query>
+        <DataSourceName>Insight_DEV</DataSourceName>
+        <QueryParameters>
+          <QueryParameter Name="@LeaseSequenceNumber">
+            <Value>=Parameters!LeaseSequenceNumber.Value</Value>
+          </QueryParameter>
+        </QueryParameters>
+        <CommandText>-- 20220414
+---USE [LW_Main]
+--GO
+--/****** Object:  StoredProcedure [dbo].[IIC_LeaseMarginDriverPage1Report]    Script Date: 9/11/2020 11:36:27 AM ******/
+--SET ANSI_NULLS ON
+--GO
+--SET QUOTED_IDENTIFIER ON
+--GO
+
+--ALTER PROCEDURE [dbo].[IIC_LeaseMarginDriverPage1Report]  
+--(  
+--DECLARE 
+--	   @LeaseSequenceNumber NVARCHAR(50) --= '9071-34'
+	 --, @CultureID VARCHAR(15)=null
+--)  
+--WITH ENCRYPTION  
+--AS
+--BEGIN
+
+--IF @CultureID IS NULL OR LEN(@CultureID) = 0  
+--BEGIN  
+--	SET @CultureID = 'en-US'  
+--END
+
+SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;  
+SET NOCOUNT ON;
+
+DECLARE @LeaseID INT;
+DECLARE @CustomerID INT;
+DECLARE @NewPeriod INT;
+
+SELECT
+	  @LeaseID = Lease_Profile.LeaseID
+	 ,@CustomerID = Lease_Profile.CustomerID
+	 ,@NewPeriod = Customer_Profile.NewPeriod
+FROM
+	Lease_Profile
+	
+	INNER JOIN Customer_Profile
+		ON Customer_Profile.CustomerID = Lease_Profile.CustomerID
+
+WHERE
+	Lease_Profile.SequenceNumber = @LeaseSequenceNumber
+
+	
+
+;WITH CTE_MSLTId
+AS
+(
+	SELECT
+		  Lease_Profile.LeaseID
+		, MSLT_LeaseTransaction_Profile.LeaseTransactionID [MSLTId]
+	FROM
+		Lease_Profile
+		INNER JOIN LeaseTransaction_Profile LSLT_LeaseTransaction_Profile
+			ON Lease_Profile.LeaseID = LSLT_LeaseTransaction_Profile.LeaseID
+			AND Lease_Profile.LeaseID = @LeaseID
+		INNER JOIN LeaseTransaction_Profile MSLT_LeaseTransaction_Profile
+			ON LSLT_LeaseTransaction_Profile.RelatedMasterTransactionID = MSLT_LeaseTransaction_Profile.LeaseTransactionID
+	WHERE
+		MSLT_LeaseTransaction_Profile.AgreementTypeID = 1 -- Master Transaction
+)
+,CTE_MSLTCreditOptionDetail
+AS
+(
+	SELECT
+		  RS1.LeaseID
+		, RS1.MSLTId
+		, RS1.CreditOptionDetailID
+	FROM
+		(
+			SELECT
+				  CTE_MSLTId.LeaseID
+				, CTE_MSLTId.MSLTId
+				, LeaseTransaction_CreditOptionDetail.CreditOptionDetailID
+				, ROW_NUMBER() OVER(PARTITION BY CTE_MSLTId.MSLTId, CTE_MSLTId.LeaseID ORDER BY LeaseTransaction_CreditOptionDetail.OptionNumber DESC) [RowNum]
+			FROM
+				CTE_MSLTId
+				INNER JOIN Lease_Profile
+					ON Lease_Profile.LeaseID = CTE_MSLTId.LeaseID
+					AND Lease_Profile.LeaseID = @LeaseID
+				INNER JOIN LeaseTransaction_Profile 
+					ON LeaseTransaction_Profile.LeaseID = Lease_Profile.LeaseID
+				INNER JOIN LeaseTransaction_PaymentCalculation
+					ON LeaseTransaction_Profile.LeaseTransactionID = LeaseTransaction_PaymentCalculation.LeaseTransactionID
+				INNER JOIN LeaseTransaction_CreditOptionHeader
+					ON CTE_MSLTId.MSLTId = LeaseTransaction_CreditOptionHeader.LeaseTransactionID
+				INNER JOIN LeaseTransaction_CreditOptionDetail
+					ON LeaseTransaction_CreditOptionHeader.CreditOptionHeaderID = LeaseTransaction_CreditOptionDetail.CreditOptionHeaderID
+				LEFT JOIN Lease_Contract
+					ON Lease_Contract.LeaseID = Lease_Profile.LeaseID
+					AND Lease_Contract.IsActive = 1 --Active
+				LEFT JOIN Lease_Investment
+					ON Lease_Investment.LeaseID = Lease_Profile.LeaseID
+					AND Lease_Investment.IsActive = 1 -- Active
+			WHERE
+				(Lease_Contract.Term = LeaseTransaction_CreditOptionDetail.LeaseTerm OR (Lease_Contract.Term IS NULL AND LeaseTransaction_PaymentCalculation.Term = LeaseTransaction_CreditOptionDetail.LeaseTerm))
+				AND (Lease_Investment.PurchaseOptionID = LeaseTransaction_CreditOptionDetail.PurchaseOptionID OR (Lease_Investment.PurchaseOptionID IS NULL AND LeaseTransaction_PaymentCalculation.PurchaseOptionStatusTypeID = LeaseTransaction_CreditOptionDetail.PurchaseOptionID))
+				AND LeaseTransaction_CreditOptionDetail.RateTypeID = 2 --Approved
+		)RS1
+	WHERE
+		RS1.RowNum = 1
+),
+CTE_CustomerLevelMiniumCommencementDate
+AS
+(
+	SELECT	
+		 Lease_Profile.CustomerID
+		,DATEADD(dd, -1, DATEADD(MM,@NewPeriod,MIN(LeaseTransaction_PaymentCalculation.InceptionDate))) AS [MinCommencementDate]
+	FROM
+		Lease_Profile
+		INNER JOIN LeaseTransaction_Profile 
+			ON 	LeaseTransaction_Profile.CustomerID = Lease_Profile.CustomerID
+			AND Lease_Profile.CustomerID = @CustomerID
+		INNER JOIN LeaseTransaction_Version
+			ON 	LeaseTransaction_Version.VersionID = LeaseTransaction_Profile.LeaseTransactionID
+			AND LeaseTransaction_Version.IsApproved = 1--Exclude LT that are in Dead Step
+			AND LeaseTransaction_Version.IsActive = 1
+		INNER JOIN LeaseTransaction_PaymentCalculation
+			ON LeaseTransaction_PaymentCalculation.LeaseTransactionID = LeaseTransaction_Profile.LeaseTransactionID
+	GROUP BY
+		Lease_Profile.CustomerID
+)
+,CTE_LeaseDetails
+AS
+(
+	SELECT 
+		  Lease_Profile.LeaseID
+		, Customer_Profile.CustomerName AS LesseName
+		, MLA_Profile.ClientMLANumber AS MasterLeaseNumber
+		, Lease_Profile.SequenceNumber AS LeaseSequenceNumber
+		, CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+				THEN Lease_Contract.InceptionDate 
+				ELSE LeaseTransaction_PaymentCalculation.InceptionDate
+		  END AS LeaseCommencementDate
+		, CASE
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+				THEN 
+					CASE 
+						WHEN Lease_Contract.ContractStructureID = 1 --Regular
+							THEN CASE 
+								WHEN Lease_Contract.RentalFrequencyID = 1 --Monthly
+									THEN 'M'
+								WHEN Lease_Contract.RentalFrequencyID = 2 --Quarterly
+									THEN 'Q'
+								WHEN Lease_Contract.RentalFrequencyID = 3 --Semi-Annually
+									THEN 'S'
+								WHEN Lease_Contract.RentalFrequencyID = 4 --Annually
+									THEN 'A'
+							END
+						WHEN Lease_Contract.ContractStructureID = 2 --Irregular
+							THEN 'NA'
+					END
+				ELSE 
+					CASE 
+						WHEN LeaseTransaction_PaymentCalculation.StructureID = 1 --Regular
+							THEN CASE 
+								WHEN LeaseTransaction_PaymentCalculation.LeaseFrequencyID = 1 --Monthly
+									THEN 'M'
+								WHEN LeaseTransaction_PaymentCalculation.LeaseFrequencyID = 2 --Quarterly
+									THEN 'Q'
+								WHEN LeaseTransaction_PaymentCalculation.LeaseFrequencyID = 3 --Semi-Annually
+									THEN 'S'
+								WHEN LeaseTransaction_PaymentCalculation.LeaseFrequencyID = 4 --Annually
+									THEN 'A'
+							END
+						WHEN LeaseTransaction_PaymentCalculation.StructureID = 2 --Irregular
+							THEN 'NA'
+					END
+		  END AS FirmTermBillingFrequency
+		, CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+				THEN Lease_Contract.TotalPaymentNumber 
+				ELSE LeaseTransaction_PaymentCalculation.NumberOfPayments
+		  END AS TotalNoOfFirmTermPayments
+		, CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+				THEN 
+					CASE 
+						WHEN Lease_Contract.RegularPaymentAmount = 0 --Irregular
+							THEN 'Irregular'
+						ELSE CONVERT(VARCHAR,Lease_Contract.RegularPaymentAmount)
+					END
+				ELSE 
+					CASE 
+						WHEN LeaseTransaction_PaymentCalculation.RegularPaymentAmount = 0 --Irregular
+							THEN 'Irregular'
+						ELSE CONVERT(VARCHAR,LeaseTransaction_PaymentCalculation.RegularPaymentAmount)
+					END
+		  END AS PeriodicRentalPaymentAmount
+		, CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+				THEN 
+					CASE
+						WHEN Lease_Contract.InceptionPaymentNumber &gt; 0 --Advance
+							THEN 'ADV'
+						ELSE 'ARR'
+					END
+				ELSE 
+					CASE
+						WHEN LeaseTransaction_PaymentCalculation.NumberOfInceptionPayments &gt; 0 --Advance
+							THEN 'ADV'
+						ELSE 'ARR'
+					END
+		  END AS FirmTermBillingCycle
+		, CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+				THEN Lease_ContractPurchaseOption_CnfgLocale.PurchaseOption 
+				ELSE FELease_ContractPurchaseOption.PurchaseOption
+		  END AS EOTOption
+		, COALESCE(Customer_Profile.NewUntilDate,CTE_CustomerLevelMiniumCommencementDate.MinCommencementDate) AS CustomerNewThroughDate
+		, Customer_Profile.AccountNumber AS CustomerID
+		, LeaseTransaction_CreditOptionDetail.DebtRateToUse AS BasePVRate
+		, CofA_Profile.AcceptedDate AS FinalAcceptanceDate
+		, CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+				THEN Lease_Contract.Term 
+				ELSE LeaseTransaction_PaymentCalculation.Term
+		  END AS LeaseTerm
+		, CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+				THEN CONVERT(DECIMAL(6,1),(Lease_Contract.TotalPaymentNumber/(Lease_Contract.Term/12))) 
+				ELSE CONVERT(DECIMAL(6,1),(LeaseTransaction_PaymentCalculation.NumberOfPayments/(LeaseTransaction_PaymentCalculation.Term/12))) 
+		  END AS NoOfPaymentsPerYear
+		, CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+			THEN MaturityManagement_Lease.PractFMVCapPercent  
+			ELSE MaturityManagement_LeaseTransaction.PractFMVCapPercent
+		  END AS FMVCapPercent
+		, FundingSource_Profile.Company AS LabellingLessor
+	FROM 
+		Lease_Profile 
+		
+		INNER JOIN Customer_Profile 
+			ON Lease_Profile.CustomerID = Customer_Profile.CustomerID			
+			AND Lease_Profile.LeaseID = @LeaseID
+		INNER JOIN FundingSource_Profile			
+			ON FundingSource_Profile.FundingSourceId = Lease_Profile.LabellingLessorID				
+		LEFT JOIN LeaseTransaction_Profile 
+			ON Lease_Profile.LeaseID = LeaseTransaction_Profile.LeaseID
+		LEFT JOIN Lease_Contract 
+			ON Lease_Profile.LeaseID = Lease_Contract.LeaseID
+			AND Lease_Contract.IsActive = 1 --Active
+		LEFT JOIN Lease_Investment
+			ON Lease_Profile.LeaseID = Lease_Investment.LeaseId
+			AND Lease_Investment.IsActive = 1 --Active
+		LEFT JOIN Lease_ContractPurchaseOption_CnfgLocale
+			ON Lease_Investment.PurchaseOptionID = Lease_ContractPurchaseOption_CnfgLocale.PurchaseOptionID
+		LEFT JOIN MLA_Profile 
+			ON Lease_Profile.MLAID = MLA_Profile.MLAID	
+		LEFT JOIN LeaseTransaction_PaymentCalculation
+			ON LeaseTransaction_Profile.LeaseTransactionID = LeaseTransaction_PaymentCalculation.LeaseTransactionID
+		LEFT JOIN Lease_ContractPurchaseOption_CnfgLocale AS FELease_ContractPurchaseOption
+			ON LeaseTransaction_PaymentCalculation.PurchaseOptionStatusTypeID = FELease_ContractPurchaseOption.PurchaseOptionID
+		LEFT JOIN CTE_MSLTCreditOptionDetail
+			ON Lease_Profile.LeaseID = CTE_MSLTCreditOptionDetail.LeaseID
+		LEFT JOIN LeaseTransaction_CreditOptionDetail
+			ON CTE_MSLTCreditOptionDetail.CreditOptionDetailID = LeaseTransaction_CreditOptionDetail.CreditOptionDetailID
+		LEFT JOIN MaturityManagement_Lease
+			ON Lease_Profile.LeaseID = MaturityManagement_Lease.LeaseID
+			AND MaturityManagement_Lease.isactive = 1
+		LEFT JOIN MaturityManagement_LeaseTransaction
+			ON LeaseTransaction_Profile.LeaseTransactionID = MaturityManagement_LeaseTransaction.LeaseTransactionID
+			AND MaturityManagement_LeaseTransaction.isactive = 1
+		LEFT JOIN CofA_Profile
+			ON LeaseTransaction_Profile.LeaseTransactionID = CofA_Profile.VersionID
+			AND CofA_Profile.IsFinalCofA = 1 --Final CofA
+			AND CofA_Profile.IsActive = 1 --Active
+		LEFT JOIN CTE_CustomerLevelMiniumCommencementDate
+			ON CTE_CustomerLevelMiniumCommencementDate.CustomerID = Customer_Profile.CustomerID	
+)
+
+,CTE_SalesPerson
+AS
+(
+	SELECT 
+		  CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+			THEN COALESCE(MAX(LeaseLevel.EmployeeAssignmentID), MAX(CustomerLevel.EmployeeAssignmentID)) 
+			ELSE COALESCE(MAX(LeaseTransactionLevel.EmployeeAssignmentID), MAX(CustomerLevel.EmployeeAssignmentID)) 
+		  END AS SalesPerson
+		, Lease_Profile.LeaseID
+	FROM 
+		Lease_Profile
+		LEFT JOIN LeaseTransaction_Profile 
+			ON Lease_Profile.LeaseID = LeaseTransaction_Profile.LeaseID
+		LEFT JOIN EmployeeAssignment_Entity LeaseLevel
+			ON LeaseLevel.EntityID = Lease_Profile.LeaseID
+			AND LeaseLevel.RoleFunctionID = 8  --Sales Rep
+			AND LeaseLevel.EntityTypeID = 5 --Lease
+			AND LeaseLevel.IsActive = 1 --Active
+		LEFT JOIN EmployeeAssignment_Entity LeaseTransactionLevel
+			ON LeaseTransactionLevel.EntityID = LeaseTransaction_Profile.LeaseTransactionID
+			AND LeaseTransactionLevel.RoleFunctionID = 8  --Sales Rep
+			AND LeaseTransactionLevel.EntityTypeID = 7 --Lease Transaction
+			AND LeaseTransactionLevel.IsActive = 1 --Active
+		LEFT JOIN EmployeeAssignment_Entity as CustomerLevel
+			ON CustomerLevel.EntityID = Lease_Profile.CustomerID
+			AND  CustomerLevel.RoleFunctionID = 8  --Sales Rep
+			AND CustomerLevel.EntityTypeID = 1 --Customer
+			AND CustomerLevel.IsActive = 1 --Active
+	WHERE
+		Lease_Profile.LeaseID = @LeaseID
+	GROUP BY 
+		  LeaseLevel.RoleFunctionID
+		, LeaseTransactionLevel.RoleFunctionID
+		, CustomerLevel.RoleFunctionID
+		, Lease_Profile.LeaseID
+		, Lease_Profile.StatusID
+)
+,CTE_SalesPersonCode
+AS
+(
+	SELECT 
+		  CTE_SalesPerson.LeaseID
+		, Security_UserProfile.UserCode AS SalesPerson
+	FROM
+		CTE_SalesPerson
+		LEFT JOIN EmployeeAssignment_Entity
+			ON CTE_SalesPerson.SalesPerson = EmployeeAssignment_Entity.EmployeeAssignmentID
+		LEFT JOIN Security_UserProfile
+			ON EmployeeAssignment_Entity.UserID = Security_UserProfile.UserID
+			AND Security_UserProfile.IsActive = 1 --Active
+)
+,CTE_CommissionUsers
+AS
+(
+	SELECT DISTINCT
+		  CASE 
+			WHEN Lease_Profile.StatusID IN (2,3,4,6) --Commenced,FullyPaidOff,Suspended,Assumed
+			THEN LeaseLevelAssignment.UserID
+			ELSE LeaseTransactionLevelAssignment.UserID
+		  END AS UserID	
+		, Lease_Profile.LeaseID
+	FROM
+		Lease_Profile
+		LEFT JOIN LeaseTransaction_Profile 
+			ON Lease_Profile.LeaseID = LeaseTransaction_Profile.LeaseID
+		LEFT JOIN EmployeeAssignment_Entity LeaseLevelAssignment
+			ON ((LeaseLevelAssignment.EntityID = Lease_Profile.LeaseID AND LeaseLevelAssignment.EntityTypeID = 5) --Lease Level
+			OR (LeaseLevelAssignment.EntityID = Lease_Profile.CustomerID AND LeaseLevelAssignment.EntityTypeID = 1)) --Customer Level
+			AND LeaseLevelAssignment.RoleFunctionID = 46 --Commissions
+			AND LeaseLevelAssignment.IsActive = 1 --Active
+		LEFT JOIN EmployeeAssignment_Entity LeaseTransactionLevelAssignment
+			ON ((LeaseTransactionLevelAssignment.EntityID = LeaseTransaction_Profile.LeaseTransactionID AND LeaseTransactionLevelAssignment.EntityTypeID = 7) --LeaseTransaction Level
+			OR (LeaseTransactionLevelAssignment.EntityID = LeaseTransaction_Profile.CustomerID AND LeaseTransactionLevelAssignment.EntityTypeID = 1)) --Customer Level
+			AND LeaseTransactionLevelAssignment.RoleFunctionID = 46 --Commissions
+			AND LeaseTransactionLevelAssignment.IsActive = 1 --Active
+	WHERE 
+		Lease_Profile.LeaseID = @LeaseID
+)
+,CTE_Commissions
+AS
+(
+	SELECT 
+		  @LeaseID AS LeaseID
+		, SUBSTRING(
+					(
+						SELECT 
+							', ' + Security_UserProfile.UserCode
+						FROM 
+							CTE_CommissionUsers
+							INNER JOIN Security_UserProfile
+								ON CTE_CommissionUsers.UserID = Security_UserProfile.UserID
+						FOR XML PATH('')
+					),3,20000) AS Commissions
+)
+,CTE_EquipmentCost
+AS
+(
+	SELECT 
+		  SUM(Lease_InventoryInLease.StickerCost) AS EquipmentCost
+		, Lease_InventoryInLease.LeaseID
+	FROM
+		Lease_InventoryInLease
+		INNER JOIN Inventory_Profile
+			ON Lease_InventoryInLease.InventoryID = Inventory_Profile.InventoryID
+			AND Lease_InventoryInLease.IsInLease = 1 --Is In Lease
+			AND Lease_InventoryInLease.LeaseID = @LeaseID
+		INNER JOIN Inventory_TypeTemplate
+			ON Inventory_Profile.InventoryTypeID = Inventory_TypeTemplate.InventoryTypeID
+	WHERE
+		Inventory_TypeTemplate.InventoryTypeName NOT IN ('MI-1400','MI-1405','MI-1605','NL-MI-1400','NL-MI-1405','NL-MI-1605','NL-MI-1603')
+	GROUP BY
+		Lease_InventoryInLease.LeaseID
+)
+,CTE_IICMarkUp
+AS
+(
+	SELECT 
+		SUM(Lease_InventoryInLease.MarkUpAmount) AS IICMarkup
+		, Lease_InventoryInLease.LeaseID
+	FROM
+		Lease_InventoryInLease		
+	WHERE
+		Lease_InventoryInLease.LeaseID = @LeaseID
+		AND Lease_InventoryInLease.IsInLease = 1 --Yes
+	GROUP BY
+		Lease_InventoryInLease.LeaseID
+)
+,CTE_UpfrontSalesTax
+AS
+(
+	SELECT 
+		  SUM(Lease_InventoryInLease.StickerCost) AS UpfrontSalesTax
+		, Lease_InventoryInLease.LeaseID
+	FROM
+		Lease_InventoryInLease
+		INNER JOIN Inventory_Profile
+			ON Lease_InventoryInLease.InventoryID = Inventory_Profile.InventoryID
+			AND Lease_InventoryInLease.IsInLease = 1 --Is In Lease
+			AND Lease_InventoryInLease.LeaseID = @LeaseID
+		INNER JOIN Inventory_TypeTemplate
+			ON Inventory_Profile.InventoryTypeID = Inventory_TypeTemplate.InventoryTypeID
+	WHERE
+		Inventory_TypeTemplate.InventoryTypeName IN ('MI-1400','NL-MI-1400','NL-MI-1603')
+	GROUP BY
+		Lease_InventoryInLease.LeaseID
+)
+,CTE_PropertyTax
+AS
+(
+	SELECT 
+		  SUM(Lease_InventoryInLease.StickerCost) AS PropertyTax
+		, Lease_InventoryInLease.LeaseID
+	FROM
+		Lease_InventoryInLease
+		INNER JOIN Inventory_Profile
+			ON Lease_InventoryInLease.InventoryID = Inventory_Profile.InventoryID
+			AND Lease_InventoryInLease.IsInLease = 1 --Is In Lease
+			AND Lease_InventoryInLease.LeaseID = @LeaseID
+		INNER JOIN Inventory_TypeTemplate
+			ON Inventory_Profile.InventoryTypeID = Inventory_TypeTemplate.InventoryTypeID
+	WHERE
+		Inventory_TypeTemplate.InventoryTypeName IN ('MI-1405','NL-MI-1405')
+	GROUP BY
+		Lease_InventoryInLease.LeaseID
+)
+,CTE_EOTFreight
+AS
+(
+	SELECT 
+		  SUM(Lease_InventoryInLease.StickerCost) AS EOTFreight
+		, Lease_InventoryInLease.LeaseID
+	FROM
+		Lease_InventoryInLease
+		INNER JOIN Inventory_Profile
+			ON Lease_InventoryInLease.InventoryID = Inventory_Profile.InventoryID
+			AND Lease_InventoryInLease.IsInLease = 1 --Is In Lease
+			AND Lease_InventoryInLease.LeaseID = @LeaseID
+		INNER JOIN Inventory_TypeTemplate
+			ON Inventory_Profile.InventoryTypeID = Inventory_TypeTemplate.InventoryTypeID
+	WHERE
+		Inventory_TypeTemplate.InventoryTypeName IN ('MI-1605','NL-MI-1605')
+	GROUP BY
+		Lease_InventoryInLease.LeaseID
+)
+,CTE_InterimProrataRent
+AS
+(
+	SELECT 
+		  SUM(Receivable_OtherPaymentHeader.Amount) AS InterimProrataAmount
+		, Receivable_OtherPaymentHeader.LeaseID 
+	FROM
+		Receivable_OtherPaymentHeader 
+	WHERE
+		Receivable_OtherPaymentHeader.ReceivableTypeID IN (2,26) --Interim Rent and Prorata Rent
+		AND Receivable_OtherPaymentHeader.LeaseID = @LeaseID
+		AND Receivable_OtherPaymentHeader.IsActive = 1 --Yes
+	GROUP BY
+		Receivable_OtherPaymentHeader.LeaseID
+)
+,CTE_AdminFee
+AS
+(
+	SELECT 
+		  SUM(Receivable_Sundry.Amount) AS AdminFee
+		, Receivable_Sundry.EntityID AS LeaseID
+	FROM
+		Receivable_Sundry
+	WHERE
+		Receivable_Sundry.SundryCodeTemplateID = 10 --Admin Fee
+		AND Receivable_Sundry.EntityTypeID = 5 --Lease
+		AND Receivable_Sundry.EntityID = @LeaseID
+		AND Receivable_Sundry.IsActive = 1 --Yes
+	GROUP BY
+		Receivable_Sundry.EntityID
+)
+------------------------------------------------------
+-- 20200911
+,
+--Ticket Item 2
+cte_AcceptanceDate
+AS
+(
+--Ticket Item 2
+SELECT 
+      LeaseID      
+	  ,MAX(InstallationDate) as AcceptanceDate
+FROM Lease_InventoryInLease
+WHERE IsInLease = 1
+GROUP BY LeaseID
+)
+,
+--Ticket Item 3
+cte_PrimaryAssetType
+AS
+(
+--Ticket Item 3
+SELECT LeaseID
+       ,ITT.InventoryTypeName as PrimaryAssetType
+FROM Lease_InventoryInLease IIL
+INNER JOIN Inventory_Profile IP
+  ON IIL.InventoryID = IP.InventoryID
+  AND IIL.IsInLease = 1
+INNER JOIN Inventory_TypeTemplate ITT
+  ON IP.InventoryTypeID = ITT.InventoryTypeID
+  AND IIL.IsPrimaryInventory = 1
+)
+SELECT 
+	  CTE_LeaseDetails.LesseName
+	, CTE_LeaseDetails.MasterLeaseNumber
+	, CTE_LeaseDetails.LeaseSequenceNumber
+	, CTE_LeaseDetails.LeaseCommencementDate
+	, CTE_LeaseDetails.FirmTermBillingFrequency
+	, CTE_LeaseDetails.TotalNoOfFirmTermPayments
+	, CTE_LeaseDetails.PeriodicRentalPaymentAmount
+	, CTE_LeaseDetails.FirmTermBillingCycle
+	, CTE_SalesPersonCode.SalesPerson
+	, CTE_LeaseDetails.EOTOption
+	, CTE_LeaseDetails.CustomerNewThroughDate
+	, CTE_EquipmentCost.EquipmentCost
+	, CTE_UpfrontSalesTax.UpfrontSalesTax
+	, CTE_IICMarkUp.IICMarkup
+	, CTE_LeaseDetails.BasePVRate
+	, CTE_InterimProrataRent.InterimProrataAmount
+	, CTE_LeaseDetails.FinalAcceptanceDate
+	, CTE_LeaseDetails.LeaseTerm
+	, CTE_LeaseDetails.NoOfPaymentsPerYear
+	, CTE_Commissions.Commissions
+	, CTE_LeaseDetails.FMVCapPercent
+	, CTE_PropertyTax.PropertyTax
+	, CTE_EOTFreight.EOTFreight
+	, CTE_LeaseDetails.CustomerID
+	, CTE_AdminFee.AdminFee
+	, CTE_LeaseDetails.LabellingLessor
+--------------------------------------
+--20200911
+	,FORMAT(ad.AcceptanceDate,'MM/dd/yyyy') LastAcceptanceDate
+	,pat.PrimaryAssetType
+--------------------------------------
+FROM 
+	CTE_LeaseDetails 
+	LEFT JOIN CTE_EquipmentCost 
+		ON CTE_LeaseDetails.LeaseID = CTE_EquipmentCost.LeaseID
+	LEFT JOIN CTE_IICMarkUp
+		ON CTE_IICMarkUp.LeaseID = CTE_LeaseDetails.LeaseID
+	LEFT JOIN CTE_Commissions
+		ON CTE_LeaseDetails.LeaseID = CTE_Commissions.LeaseID
+	LEFT JOIN CTE_UpfrontSalesTax 
+		ON CTE_LeaseDetails.LeaseID = CTE_UpfrontSalesTax.LeaseID
+	LEFT JOIN CTE_PropertyTax 
+		ON CTE_LeaseDetails.LeaseID = CTE_PropertyTax.LeaseID
+	LEFT JOIN CTE_EOTFreight 
+		ON CTE_LeaseDetails.LeaseID = CTE_EOTFreight.LeaseID
+	LEFT JOIN CTE_InterimProrataRent 
+		ON CTE_LeaseDetails.LeaseID = CTE_InterimProrataRent.LeaseID
+	LEFT JOIN CTE_AdminFee 
+		ON CTE_LeaseDetails.LeaseID = CTE_AdminFee.LeaseID
+	LEFT JOIN CTE_SalesPersonCode
+		ON CTE_LeaseDetails.LeaseID = CTE_SalesPersonCode.LeaseID
+-----------------------------------------------------------------
+-- 20200911
+INNER JOIN cte_AcceptanceDate ad
+	ON CTE_LeaseDetails.LeaseID = ad.LeaseID
+LEFT JOIN cte_PrimaryAssetType pat 
+	ON CTE_LeaseDetails.LeaseID = pat.LeaseID
+
+--END</CommandText>
+        <rd:UseGenericDesigner>true</rd:UseGenericDesigner>
+      </Query>
+      <Fields>
+        <Field Name="LesseName">
+          <DataField>LesseName</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="MasterLeaseNumber">
+          <DataField>MasterLeaseNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="LeaseSequenceNumber">
+          <DataField>LeaseSequenceNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="LeaseCommencementDate">
+          <DataField>LeaseCommencementDate</DataField>
+          <rd:TypeName>System.DateTime</rd:TypeName>
+        </Field>
+        <Field Name="FirmTermBillingFrequency">
+          <DataField>FirmTermBillingFrequency</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="TotalNoOfFirmTermPayments">
+          <DataField>TotalNoOfFirmTermPayments</DataField>
+          <rd:TypeName>System.Int16</rd:TypeName>
+        </Field>
+        <Field Name="PeriodicRentalPaymentAmount">
+          <DataField>PeriodicRentalPaymentAmount</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="FirmTermBillingCycle">
+          <DataField>FirmTermBillingCycle</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="SalesPerson">
+          <DataField>SalesPerson</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="EOTOption">
+          <DataField>EOTOption</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="CustomerNewThroughDate">
+          <DataField>CustomerNewThroughDate</DataField>
+          <rd:TypeName>System.DateTime</rd:TypeName>
+        </Field>
+        <Field Name="EquipmentCost">
+          <DataField>EquipmentCost</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="UpfrontSalesTax">
+          <DataField>UpfrontSalesTax</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="IICMarkup">
+          <DataField>IICMarkup</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="BasePVRate">
+          <DataField>BasePVRate</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="InterimProrataAmount">
+          <DataField>InterimProrataAmount</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="FinalAcceptanceDate">
+          <DataField>FinalAcceptanceDate</DataField>
+          <rd:TypeName>System.DateTime</rd:TypeName>
+        </Field>
+        <Field Name="LeaseTerm">
+          <DataField>LeaseTerm</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="NoOfPaymentsPerYear">
+          <DataField>NoOfPaymentsPerYear</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="Commissions">
+          <DataField>Commissions</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="FMVCapPercent">
+          <DataField>FMVCapPercent</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="PropertyTax">
+          <DataField>PropertyTax</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="EOTFreight">
+          <DataField>EOTFreight</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="CustomerID">
+          <DataField>CustomerID</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="AdminFee">
+          <DataField>AdminFee</DataField>
+          <rd:TypeName>System.Decimal</rd:TypeName>
+        </Field>
+        <Field Name="LabellingLessor">
+          <DataField>LabellingLessor</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="LastAcceptanceDate">
+          <DataField>LastAcceptanceDate</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="PrimaryAssetType">
+          <DataField>PrimaryAssetType</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+      </Fields>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Textbox Name="Textbox2">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Lessee Name</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox2</rd:DefaultName>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox3">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Equipment Cost (excluding Upfront Sales Tax, Property Tax and Freight)</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox3</rd:DefaultName>
+            <Top>2.75in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>1</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox4">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Master Lease Number</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox4</rd:DefaultName>
+            <Top>0.25in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>2</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox5">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Lease Sequence Number</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox5</rd:DefaultName>
+            <Top>0.5in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>3</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox6">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Lease Commencement Date</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox6</rd:DefaultName>
+            <Top>0.75in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>4</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox7">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Firm Term Billing Frequency</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox7</rd:DefaultName>
+            <Top>1in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>5</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox8">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Total No of Firm Term Payments</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox8</rd:DefaultName>
+            <Top>1.25in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>6</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox9">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Periodic Rental Payment Amount</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox9</rd:DefaultName>
+            <Top>1.5in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>7</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox10">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Firm Term Billing Cycle</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox10</rd:DefaultName>
+            <Top>1.75in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>8</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox11">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Salesperson</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox11</rd:DefaultName>
+            <Top>2in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>9</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox12">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>EOT Option</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox12</rd:DefaultName>
+            <Top>2.25in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>10</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox13">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Customer New Through Date</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox13</rd:DefaultName>
+            <Top>2.5in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>11</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox14">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Upfront Sales Tax</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox4</rd:DefaultName>
+            <Top>3in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>12</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox15">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>IIC Markup</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox5</rd:DefaultName>
+            <Top>3.25in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>13</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox16">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>BasePVRate</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox6</rd:DefaultName>
+            <Top>3.5in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>14</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox17">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Interim and Prorata Amount</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox7</rd:DefaultName>
+            <Top>3.75in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>15</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox18">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Last Acceptance Date</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox8</rd:DefaultName>
+            <Top>4in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>16</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox19">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Lease Term</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox9</rd:DefaultName>
+            <Top>4.25in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>17</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox20">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>No of Payments Per Year</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox10</rd:DefaultName>
+            <Top>4.5in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>18</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox21">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Split Commission with</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox11</rd:DefaultName>
+            <Top>4.75in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>19</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox22">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>FMV Cap % (GL to convert to $)</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox12</rd:DefaultName>
+            <Top>5in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>20</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox23">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Property Tax</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox13</rd:DefaultName>
+            <Top>5.25in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>21</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox24">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Labeling Lessor</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox13</rd:DefaultName>
+            <Top>6.25in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>22</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox25">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Admin Fee</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox12</rd:DefaultName>
+            <Top>6in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>23</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox26">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Customer ID</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox11</rd:DefaultName>
+            <Top>5.75in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>24</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox27">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>EOT Freight</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox10</rd:DefaultName>
+            <Top>5.5in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>25</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox28">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!LesseName.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox28</rd:DefaultName>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>26</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox29">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>MasterLeaseNumber</Label>
+                    <Value>=IIF(IsNothing(Fields!MasterLeaseNumber.Value),"-",Fields!MasterLeaseNumber.Value)</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox29</rd:DefaultName>
+            <Top>0.25in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>27</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox30">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!LeaseSequenceNumber.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>0.5in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>28</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox31">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!LeaseCommencementDate.Value</Value>
+                    <Style>
+                      <Format>MM/dd/yy</Format>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox28</rd:DefaultName>
+            <Top>0.75in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>29</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox32">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!FirmTermBillingFrequency.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox29</rd:DefaultName>
+            <Top>1in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>30</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox33">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>TotalNoOfFirmTermPayments</Label>
+                    <Value>=IIF(IsNothing(Fields!TotalNoOfFirmTermPayments.Value),0,Fields!TotalNoOfFirmTermPayments.Value)</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>1.25in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>31</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox34">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>PeriodicRentalPaymentAmount</Label>
+                    <Value>=IIF(IsNothing(Fields!PeriodicRentalPaymentAmount.Value),0.00,IIF(IsNumeric(Fields!PeriodicRentalPaymentAmount.Value),Val(Fields!PeriodicRentalPaymentAmount.Value),Fields!PeriodicRentalPaymentAmount.Value))</Value>
+                    <Style>
+                      <Format>'$'#,0.00;('$'#,0.00)</Format>
+                      <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox28</rd:DefaultName>
+            <Top>1.5in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>32</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox35">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!FirmTermBillingCycle.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox29</rd:DefaultName>
+            <Top>1.75in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>33</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox36">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!SalesPerson.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>2in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>34</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox37">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!EOTOption.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox28</rd:DefaultName>
+            <Top>2.25in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>35</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox38">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=DateAdd("d",-1,Fields!CustomerNewThroughDate.Value)</Value>
+                    <Style>
+                      <Format>MM/dd/yy</Format>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox29</rd:DefaultName>
+            <Top>2.5in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>36</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox39">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>EquipmentCost</Label>
+                    <Value>=IIF(IsNothing(Fields!EquipmentCost.Value),0.00,Fields!EquipmentCost.Value)</Value>
+                    <Style>
+                      <Format>'$'#,0.00;('$'#,0.00)</Format>
+                      <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>2.75in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>37</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox40">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>UpfrontSalesTax</Label>
+                    <Value>=IIF(IsNothing(Fields!UpfrontSalesTax.Value),0.00,Fields!UpfrontSalesTax.Value)</Value>
+                    <Style>
+                      <Format>'$'#,0.00;('$'#,0.00)</Format>
+                      <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox28</rd:DefaultName>
+            <Top>3in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>38</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox41">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>IICMarkup</Label>
+                    <Value>=IIF(IsNothing(Fields!IICMarkup.Value),0.00,Fields!IICMarkup.Value)</Value>
+                    <Style>
+                      <Format>'$'#,0.00;('$'#,0.00)</Format>
+                      <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox29</rd:DefaultName>
+            <Top>3.25in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>39</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox42">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>BasePVRate</Label>
+                    <Value>=IIF(IsNothing(Fields!BasePVRate.Value),0,Fields!BasePVRate.Value/100)</Value>
+                    <Style>
+                      <Format>0.00%</Format>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>3.5in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>40</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox43">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>InterimProrataAmount</Label>
+                    <Value>=IIF(IsNothing(Fields!InterimProrataAmount.Value),0.00,Fields!InterimProrataAmount.Value)</Value>
+                    <Style>
+                      <Format>'$'#,0.00;('$'#,0.00)</Format>
+                      <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox28</rd:DefaultName>
+            <Top>3.75in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>41</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox44">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!LastAcceptanceDate.Value</Value>
+                    <Style>
+                      <Format>MM/dd/yy</Format>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox29</rd:DefaultName>
+            <Top>4in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>42</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox45">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!LeaseTerm.Value</Value>
+                    <Style>
+                      <Format>0;(0)</Format>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>4.25in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>43</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox46">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!NoOfPaymentsPerYear.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox28</rd:DefaultName>
+            <Top>4.5in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>44</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox47">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!Commissions.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox29</rd:DefaultName>
+            <Top>4.75in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>45</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox48">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>FMVCapPercent</Label>
+                    <Value>=IIF(IsNothing(Fields!FMVCapPercent.Value),0.00,(Fields!FMVCapPercent.Value/100))</Value>
+                    <Style>
+                      <Format>0.00%</Format>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>5in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>46</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox49">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>PropertyTax</Label>
+                    <Value>=IIF(IsNothing(Fields!PropertyTax.Value),0.00,Fields!PropertyTax.Value)</Value>
+                    <Style>
+                      <Format>'$'#,0.00;('$'#,0.00)</Format>
+                      <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox28</rd:DefaultName>
+            <Top>5.25in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>47</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox50">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>EOTFreight</Label>
+                    <Value>=IIF(IsNothing(Fields!EOTFreight.Value),0.00,Fields!EOTFreight.Value)</Value>
+                    <Style>
+                      <Format>'$'#,0.00;('$'#,0.00)</Format>
+                      <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox29</rd:DefaultName>
+            <Top>5.5in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>48</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox51">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!CustomerID.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>5.75in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>49</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox52">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!LabellingLessor.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>6.25in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>50</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox53">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Label>AdminFee</Label>
+                    <Value>=IIF(IsNothing(Fields!AdminFee.Value),0.00,Fields!AdminFee.Value)</Value>
+                    <Style>
+                      <Format>'$'#,0.00;('$'#,0.00)</Format>
+                      <rd:FormatSymbolCulture>en-US</rd:FormatSymbolCulture>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox29</rd:DefaultName>
+            <Top>6in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>51</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox54">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>=Fields!PrimaryAssetType.Value</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style>
+                  <TextAlign>Center</TextAlign>
+                </Style>
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox30</rd:DefaultName>
+            <Top>6.5in</Top>
+            <Left>4.75555in</Left>
+            <Height>0.25in</Height>
+            <Width>2.54862in</Width>
+            <ZIndex>52</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Textbox Name="Textbox55">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>Primary Asset Type</Value>
+                    <Style />
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>Textbox13</rd:DefaultName>
+            <Top>6.5in</Top>
+            <Left>0.00001in</Left>
+            <Height>0.25in</Height>
+            <Width>4.75554in</Width>
+            <ZIndex>53</ZIndex>
+            <Style>
+              <Border>
+                <Style>None</Style>
+              </Border>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+        </ReportItems>
+        <Height>6.95833in</Height>
+        <Style />
+      </Body>
+      <Width>8.15835in</Width>
+      <Page>
+        <LeftMargin>0.5in</LeftMargin>
+        <RightMargin>0.25in</RightMargin>
+        <TopMargin>0.5in</TopMargin>
+        <BottomMargin>0.25in</BottomMargin>
+        <Style />
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <ReportParameters>
+    <ReportParameter Name="LeaseSequenceNumber">
+      <DataType>String</DataType>
+      <Prompt>Lease Sequence Number</Prompt>
+    </ReportParameter>
+    <ReportParameter Name="CultureID">
+      <DataType>String</DataType>
+      <DefaultValue>
+        <Values>
+          <Value>en-US</Value>
+        </Values>
+      </DefaultValue>
+      <Prompt>CultureID</Prompt>
+      <Hidden>true</Hidden>
+      <ValidValues>
+        <ParameterValues>
+          <ParameterValue>
+            <Value>en-US</Value>
+            <Label>en-US</Label>
+          </ParameterValue>
+        </ParameterValues>
+      </ValidValues>
+    </ReportParameter>
+  </ReportParameters>
+  <ReportParametersLayout>
+    <GridLayoutDefinition>
+      <NumberOfColumns>2</NumberOfColumns>
+      <NumberOfRows>1</NumberOfRows>
+      <CellDefinitions>
+        <CellDefinition>
+          <ColumnIndex>0</ColumnIndex>
+          <RowIndex>0</RowIndex>
+          <ParameterName>LeaseSequenceNumber</ParameterName>
+        </CellDefinition>
+        <CellDefinition>
+          <ColumnIndex>1</ColumnIndex>
+          <RowIndex>0</RowIndex>
+          <ParameterName>CultureID</ParameterName>
+        </CellDefinition>
+      </CellDefinitions>
+    </GridLayoutDefinition>
+  </ReportParametersLayout>
+  <Language>en-US</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Inch</rd:ReportUnitType>
+  <rd:ReportServerUrl>http://devsmap18.insightinvestments.com/ReportServer</rd:ReportServerUrl>
+  <rd:ReportID>f65ab363-1951-4ed6-ad97-4cff501a07e7</rd:ReportID>
+</Report>

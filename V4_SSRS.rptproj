@@ -1,0 +1,162 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="Current" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Condition=" '$(Configuration)' == 'Debug' ">
+    <FullPath>Debug</FullPath>
+    <OutputPath>bin\Debug</OutputPath>
+    <ErrorLevel>2</ErrorLevel>
+    <OverwriteDatasets>False</OverwriteDatasets>
+    <OverwriteDataSources>False</OverwriteDataSources>
+    <TargetServerVersion>SSRS2016</TargetServerVersion>
+    <Platform>Win32</Platform>
+    <TargetReportFolder>V4_SSRS</TargetReportFolder>
+    <TargetDatasetFolder>Datasets</TargetDatasetFolder>
+    <TargetDatasourceFolder>Data Sources</TargetDatasourceFolder>
+    <TargetReportPartFolder>Report Parts</TargetReportPartFolder>
+    <TargetServerURL>http://localhost/reportserver</TargetServerURL>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'DebugLocal' ">
+    <FullPath>DebugLocal</FullPath>
+    <OutputPath>bin\DebugLocal</OutputPath>
+    <ErrorLevel>2</ErrorLevel>
+    <OverwriteDatasets>False</OverwriteDatasets>
+    <OverwriteDataSources>False</OverwriteDataSources>
+    <TargetServerVersion>SSRS2016</TargetServerVersion>
+    <Platform>Win32</Platform>
+    <TargetReportFolder>V4_SSRS</TargetReportFolder>
+    <TargetDatasetFolder>Datasets</TargetDatasetFolder>
+    <TargetDatasourceFolder>Data Sources</TargetDatasourceFolder>
+    <TargetReportPartFolder>Report Parts</TargetReportPartFolder>
+    <TargetServerURL>http://localhost/reportserver</TargetServerURL>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)' == 'Release' ">
+    <FullPath>Release</FullPath>
+    <OutputPath>bin\Release</OutputPath>
+    <ErrorLevel>2</ErrorLevel>
+    <OverwriteDatasets>False</OverwriteDatasets>
+    <OverwriteDataSources>False</OverwriteDataSources>
+    <TargetServerVersion>SSRS2016</TargetServerVersion>
+    <Platform>Win32</Platform>
+    <TargetReportFolder>V4_SSRS</TargetReportFolder>
+    <TargetDatasetFolder>Datasets</TargetDatasetFolder>
+    <TargetDatasourceFolder>Data Sources</TargetDatasourceFolder>
+    <TargetReportPartFolder>Report Parts</TargetReportPartFolder>
+    <TargetServerURL>http://localhost/reportserver</TargetServerURL>
+  </PropertyGroup>
+  <PropertyGroup>
+    <State>$base64$PFNvdXJjZUNvbnRyb2xJbmZvIHhtbG5zOnhzZD0iaHR0cDovL3d3dy53My5vcmcvMjAwMS9YTUxTY2hlbWEiIHhtbG5zOnhzaT0iaHR0cDovL3d3dy53My5vcmcvMjAwMS9YTUxTY2hlbWEtaW5zdGFuY2UiIHhtbG5zOmRkbDI9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDAzL2VuZ2luZS8yIiB4bWxuczpkZGwyXzI9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDAzL2VuZ2luZS8yLzIiIHhtbG5zOmRkbDEwMF8xMDA9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDA4L2VuZ2luZS8xMDAvMTAwIiB4bWxuczpkZGwyMDA9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDEwL2VuZ2luZS8yMDAiIHhtbG5zOmRkbDIwMF8yMDA9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDEwL2VuZ2luZS8yMDAvMjAwIiB4bWxuczpkZGwzMDA9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDExL2VuZ2luZS8zMDAiIHhtbG5zOmRkbDMwMF8zMDA9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDExL2VuZ2luZS8zMDAvMzAwIiB4bWxuczpkZGw0MDA9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDEyL2VuZ2luZS80MDAiIHhtbG5zOmRkbDQwMF80MDA9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDEyL2VuZ2luZS80MDAvNDAwIiB4bWxuczpkZGw1MDA9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDEzL2VuZ2luZS81MDAiIHhtbG5zOmRkbDUwMF81MDA9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vYW5hbHlzaXNzZXJ2aWNlcy8yMDEzL2VuZ2luZS81MDAvNTAwIiB4bWxuczpkd2Q9Imh0dHA6Ly9zY2hlbWFzLm1pY3Jvc29mdC5jb20vRGF0YVdhcmVob3VzZS9EZXNpZ25lci8xLjAiPg0KICA8RW5hYmxlZD5mYWxzZTwvRW5hYmxlZD4NCiAgPFByb2plY3ROYW1lPjwvUHJvamVjdE5hbWU+DQogIDxBdXhQYXRoPjwvQXV4UGF0aD4NCiAgPExvY2FsUGF0aD48L0xvY2FsUGF0aD4NCiAgPFByb3ZpZGVyPjwvUHJvdmlkZXI+DQo8L1NvdXJjZUNvbnRyb2xJbmZvPg==</State>
+    <DataSources>@(DataSource)</DataSources>
+    <DataSets>@(DataSet)</DataSets>
+    <Reports>@(Report)</Reports>
+  </PropertyGroup>
+  <ItemGroup>
+    <DataSource Include="LWDW.rds" />
+  </ItemGroup>
+  <ItemGroup>
+    <Report Include="Account Assignment Report.rdl" />
+    <Report Include="Accumulative_Revenue_Report.rdl" />
+    <Report Include="Active Leases Report.rdl" />
+    <Report Include="AR Aging Report - Cash Applications.rdl" />
+    <Report Include="AR Aging Report - Detail.rdl" />
+    <Report Include="Asset Type Useful Life Report.rdl" />
+    <Report Include="Asset_Manufacturer_Report.rdl" />
+    <Report Include="Asset_Search_Report.rdl" />
+    <Report Include="Baird_Attachment_A.rdl" />
+    <Report Include="Barnet_Dulaney_Attachment_A.rdl" />
+    <Report Include="Borrowing_Base_Exception_Report.rdl" />
+    <Report Include="Borrowing_Base_Report.rdl" />
+    <Report Include="Check_Request_Report.rdl" />
+    <Report Include="CMS_Logistics_Attachment_A.rdl" />
+    <Report Include="CNB_Invoice_Log_Report.rdl" />
+    <Report Include="CNB_Projections_Deals_Moved_Advanced_Report.rdl" />
+    <Report Include="CNB_Projections_Report.rdl" />
+    <Report Include="Credit_Ratings_Report_All.rdl" />
+    <Report Include="Credit_Ratings_Report_Recent.rdl" />
+    <Report Include="Customer Exposure.rdl" />
+    <Report Include="Customer Obligation Balance Report.rdl" />
+    <Report Include="Customer_Invoice_Group_By_Lease_Report.rdl" />
+    <Report Include="Customer_Locations_Report.rdl" />
+    <Report Include="Customer_Summary_Financial_Statement_Report.rdl" />
+    <Report Include="Daily_GL_Extract_Report.rdl" />
+    <Report Include="Daily_Invoicing_Extract_Report.rdl" />
+    <Report Include="Deals_Circled_Future_Fundings_Report.rdl" />
+    <Report Include="Debt_Balance_and_Related_Interest_Report.rdl" />
+    <Report Include="Debt_Tracker_Report.rdl" />
+    <Report Include="Deposit_Asset_Report.rdl" />
+    <Report Include="Discount for Loan Transition - RRP Report (1).rdl" />
+    <Report Include="Discount for Loan Untied Payments Report.rdl" />
+    <Report Include="Discount for Loan Untied Payments Report_20250908.rdl" />
+    <Report Include="Discount For Loan Validation Report.rdl" />
+    <Report Include="EOL_Lease_Details_Report.rdl" />
+    <Report Include="Equipment Location By Customer.rdl" />
+    <Report Include="Estimated_Unguaranteed_Residual_Value_Report.rdl" />
+    <Report Include="Financial_Gain_Loss_Report.rdl" />
+    <Report Include="FirmTerm and OTP Rental Validation Report.rdl" />
+    <Report Include="FullyPaidOff Lease Report.rdl" />
+    <Report Include="Funding_Rate_Revision_Report.rdl" />
+    <Report Include="Future_Minimum_LeasePayments_Report.rdl" />
+    <Report Include="Future_Minimum_PrincipalPayments_Report.rdl" />
+    <Report Include="Generic_Attachment_A.rdl" />
+    <Report Include="Harvard_Leases_Report.rdl" />
+    <Report Include="Hershey_Term_Notices_Report.rdl" />
+    <Report Include="Hyundai_Attachment_A.rdl" />
+    <Report Include="Interim_Rent_Report.rdl" />
+    <Report Include="Lease Income Report for FAR.rdl" />
+    <Report Include="Lease Profile Report for FAR.rdl" />
+    <Report Include="Lease Wave Customer Lookup.rdl" />
+    <Report Include="Leases_Funded_Report.rdl" />
+    <Report Include="LeaseWave Invoice Retrieval Report.rdl" />
+    <Report Include="Lease_Added_Report.rdl" />
+    <Report Include="Lease_Added_Report_Tax_Version.rdl" />
+    <Report Include="Lease_Detail_Report_Sales.rdl" />
+    <Report Include="Lease_Margin_Driver_Page1_Report.rdl" />
+    <Report Include="Lease_Margin_Driver_Page2_Report.rdl" />
+    <Report Include="Lease_Summary_Sheet_Report.rdl" />
+    <Report Include="Lease_Volume_Report.rdl" />
+    <Report Include="Lender_Audit_Report.rdl" />
+    <Report Include="Lender_Preshop_Report.rdl" />
+    <Report Include="Lifetouch_LNSS_Attachment_A.rdl" />
+    <Report Include="Lifetouch_LTI_Attachment_A.rdl" />
+    <Report Include="List of Buyouts and Payoffs Report.rdl" />
+    <Report Include="LW Master Asset Types Desc.rdl" />
+    <Report Include="LW Master Asset Types.rdl" />
+    <Report Include="LW_Undeliverable_Email_Report.rdl" />
+    <Report Include="MLA Extract Report.rdl" />
+    <Report Include="Monthly_Transaction_Report_For_Commission.rdl" />
+    <Report Include="MSLT By Expiration Date.rdl" />
+    <Report Include="Multi_Fund_Spreadsheet.rdl" />
+    <Report Include="New_Customers.rdl" />
+    <Report Include="Notice_Reminder_Report.rdl" />
+    <Report Include="OtherCosts_Summary_Report.rdl" />
+    <Report Include="OTP Suspend Report.rdl" />
+    <Report Include="Payables_Report_For_Funding.rdl" />
+    <Report Include="Payoffs_Report.rdl" />
+    <Report Include="Pending_Book_Bill_Report.rdl" />
+    <Report Include="Pending_Fundings_Report.rdl" />
+    <Report Include="Portfolio_Remarketing_Quote_Sheet_Report.rdl" />
+    <Report Include="Property Tax Bill Number Report.rdl" />
+    <Report Include="Prorata_Calculation_Report.rdl" />
+    <Report Include="QSI_Attachment_A.rdl" />
+    <Report Include="Rebooked Leases.rdl" />
+    <Report Include="Receipt_Posting_Report.rdl" />
+    <Report Include="Recurring_Sundry_Report.rdl" />
+    <Report Include="Remarketing_Activities_Report.rdl" />
+    <Report Include="Remittance Discrepancy Report.rdl" />
+    <Report Include="Residual_Value_Exception_Report.rdl" />
+    <Report Include="Sales_Tax_Detail_Report.rdl" />
+    <Report Include="Sales_Tax_Detail_Report_Billing.rdl" />
+    <Report Include="Sales_Tax_Summary_Report.rdl" />
+    <Report Include="Sedgwick_Attachment_A.rdl" />
+    <Report Include="Soft Cost Matrix Report.rdl" />
+    <Report Include="Soft Cost Stop Billing Report.rdl" />
+    <Report Include="Stop_Billing_Report.rdl" />
+    <Report Include="Sundry_Audit_List_Report.rdl" />
+    <Report Include="Unallocated Cash Balances Report.rdl" />
+    <Report Include="Upcoming_Lease_Maturity_Report.rdl" />
+    <Report Include="Upcoming_Lease_Maturity_Report_Acct.rdl" />
+    <Report Include="Upfront Tax Summary Report.rdl" />
+    <Report Include="Vendor_Report.rdl" />
+    <Report Include="Yamaha_Canada_Music_Attachment_A.rdl" />
+    <Report Include="Yamaha_Motor_Attachment_A.rdl" />
+  </ItemGroup>
+  <Import Project="$(MSBuildExtensionsPath)\Reporting Services\Microsoft.ReportingServices.MSBuilder.targets" />
+</Project>
