@@ -50,6 +50,7 @@
   </PropertyGroup>
   <ItemGroup>
     <DataSource Include="LWDW.rds" />
+    <DataSource Include="LWDW_UAT.rds" />
   </ItemGroup>
   <ItemGroup>
     <Report Include="Account Assignment Report.rdl" />
@@ -86,7 +87,7 @@
     <Report Include="Discount for Loan Untied Payments Report.rdl" />
     <Report Include="Discount for Loan Untied Payments Report_20250908.rdl" />
     <Report Include="Discount For Loan Validation Report.rdl" />
-    <Report Include="EOL_Lease_Details_Report.rdl" />
+    <Report Include="EOL_Lease_Details_Report_fix.rdl" />
     <Report Include="Equipment Location By Customer.rdl" />
     <Report Include="Estimated_Unguaranteed_Residual_Value_Report.rdl" />
     <Report Include="Financial_Gain_Loss_Report.rdl" />
