@@ -1,0 +1,3417 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Report MustUnderstand="df" xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner" xmlns:df="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition/defaultfontfamily" xmlns:am="http://schemas.microsoft.com/sqlserver/reporting/authoringmetadata">
+  <Description>Version: 20220407</Description>
+  <am:AuthoringMetadata>
+    <am:CreatedBy>
+      <am:Name>SSDTRS</am:Name>
+      <am:Version>17.14.36804.6</am:Version>
+    </am:CreatedBy>
+    <am:UpdatedBy>
+      <am:Name>SSDTRS</am:Name>
+      <am:Version>17.14.36804.6</am:Version>
+    </am:UpdatedBy>
+    <am:LastModifiedTimestamp>2026-02-17T17:48:54.0619774Z</am:LastModifiedTimestamp>
+  </am:AuthoringMetadata>
+  <df:DefaultFontFamily>Segoe UI</df:DefaultFontFamily>
+  <AutoRefresh>0</AutoRefresh>
+  <DataSources>
+    <DataSource Name="DataSource1">
+      <DataSourceReference>LWDW</DataSourceReference>
+      <rd:SecurityType>Integrated</rd:SecurityType>
+      <rd:DataSourceID>13370572-ad1e-4402-8ab4-632d7e10af68</rd:DataSourceID>
+    </DataSource>
+  </DataSources>
+  <DataSets>
+    <DataSet Name="DataSet3">
+      <Query>
+        <DataSourceName>DataSource1</DataSourceName>
+        <CommandText>-- 20211230
+-- 1_PTMS_Extract
+-- PTMS Extract query
+DECLARE @AsofDate DATE /*= GETDATE()*/
+--, @CultureId VARCHAR(10) = 'en-US'
+Set @AsOfDate = GETDATE() --CAST(Format(GetDate(),'yyy-MM-01') As Datetime)
+Print @AsOfDate
+
+--DROP TABLE Tax.dbo.PTMSExportList
+;
+WITH
+	CTE_InventoryLocation
+		AS
+		(
+			SELECT
+				  RS1.InventoryID
+				, Inventory_LocationHistory.LocationTemplateID
+			FROM
+				(
+					SELECT
+						  RS1.InventoryID
+						, MAX(Inventory_LocationHistory.InventoryLocationHistoryID) [MaxInventoryLocationHistoryID]
+					FROM
+						(
+							SELECT
+								  Inventory_PTMS.InventoryID
+								, MAX(Inventory_LocationHistory.LocationEffectiveFromDate) [MaxLocationEffectiveFromDate]
+							FROM
+								Inventory_PTMS
+								LEFT JOIN Inventory_LocationHistory
+									ON Inventory_LocationHistory.InventoryID = Inventory_PTMS.InventoryID
+									AND Inventory_LocationHistory.LocationTypeID = 1 --Tax
+									AND Inventory_LocationHistory.LocationTemplateID IS NOT NULL
+									AND Inventory_LocationHistory.LocationEffectiveFromDate &lt;= @AsofDate
+							GROUP BY
+								Inventory_PTMS.InventoryID
+						) RS1
+						LEFT JOIN Inventory_LocationHistory
+							ON Inventory_LocationHistory.InventoryID = RS1.InventoryID
+							AND Inventory_LocationHistory.LocationTypeID = 1 --Tax
+							AND Inventory_LocationHistory.LocationTemplateID IS NOT NULL
+							AND Inventory_LocationHistory.LocationEffectiveFromDate = RS1.MaxLocationEffectiveFromDate
+					GROUP BY
+						RS1.InventoryID
+				) RS1
+				LEFT JOIN Inventory_LocationHistory
+					ON Inventory_LocationHistory.InventoryLocationHistoryID = RS1.MaxInventoryLocationHistoryID
+		),
+	CTE_InventoryLease
+		AS
+		(
+			SELECT
+				  RS1.InventoryID
+				, Inventory_History.LeaseID
+			FROM
+				(
+					SELECT
+						  RS1.InventoryID
+						, MAX(Inventory_History.InventoryHistoryID) [MaxInventoryHistoryID]
+					FROM
+						(
+							SELECT
+								  Inventory_PTMS.InventoryID
+								, MAX(Inventory_History.AsofDate) [MaxAsofDate]
+							FROM
+								Inventory_PTMS
+								LEFT JOIN Inventory_History
+									ON Inventory_History.InventoryID = Inventory_PTMS.InventoryID
+									AND Inventory_History.InventoryStatusID = 6 --Leased
+									AND Inventory_History.LeaseID IS NOT NULL
+									AND Inventory_History.AsOfDate &lt;= @AsofDate
+							GROUP BY
+								Inventory_PTMS.InventoryID
+						) RS1
+						LEFT JOIN Inventory_History
+							ON Inventory_History.InventoryID = RS1.InventoryID
+							AND Inventory_History.InventoryStatusID = 6 --Leased
+							AND Inventory_History.LeaseID IS NOT NULL
+							AND Inventory_History.AsofDate = RS1.MaxAsofDate
+					GROUP BY
+						RS1.InventoryID
+			) RS1
+			LEFT JOIN Inventory_History
+				ON Inventory_History.InventoryHistoryID = RS1.MaxInventoryHistoryID
+		),
+	CTE_InventoryStatusAsOfDate
+		AS
+		(
+			SELECT
+				RS1.InventoryID
+				, MAX(Inventory_History.AsofDate) [InventoryCurrentStatusAsofDate]		
+			FROM
+				(
+					SELECT
+						Inventory_PTMS.InventoryID
+						, MAX(Inventory_History.InventoryHistoryID) [MaxInventoryHistoryID]
+					FROM
+						Inventory_PTMS
+						INNER JOIN Inventory_History
+							ON Inventory_History.InventoryID = Inventory_PTMS.InventoryID	
+							AND Inventory_History.AsOfDate &lt;= @AsofDate
+					GROUP BY
+						Inventory_PTMS.InventoryID
+				) RS1
+				INNER JOIN Inventory_History
+					ON Inventory_History.InventoryID = RS1.InventoryID
+					AND Inventory_History.InventoryHistoryID = RS1.MaxInventoryHistoryID
+			GROUP BY
+				RS1.InventoryID			
+		),
+	CTE_CustomerMainPrimaryContactList
+		AS
+		(
+			SELECT
+				  Contact_EntityPersonRelation.EntityID [CustomerID]
+				, (Contact_Person.FirstName + SPACE(1) + Contact_Person.LastName) [ContactPerson]
+				, Contact_Person.PhoneNumber1 [PhoneNumber]
+				, Contact_Person.FaxNumber [FaxNumber]
+				, REPLACE(REPLACE(Contact_Address.Address, CHAR(13), ''), CHAR(10), '') [Address]
+				, Contact_Address.Address2 [Address2]
+				, Contact_Address.City [City]
+				, Template_State_CnfgLocale.StateShortName [StateShortName]
+				, Contact_Address.ZIP [ZIP]
+			FROM
+				Contact_EntityPersonRelation
+				INNER JOIN Contact_ContactTypeRelationAssignment
+					ON Contact_ContactTypeRelationAssignment.ContactRelationID = Contact_EntityPersonRelation.ContactRelationID
+					AND Contact_ContactTypeRelationAssignment.ContactTypeID = 1 --Main
+					AND Contact_ContactTypeRelationAssignment.ContactSubTypeID = 1 --Primary
+					AND Contact_ContactTypeRelationAssignment.IsActive = 1 --Yes
+				INNER JOIN Contact_Person
+					ON Contact_Person.ContactPersonID = Contact_EntityPersonRelation.ContactPersonID
+				INNER JOIN Contact_Address
+					ON Contact_Address.ContactAddressID = Contact_Person.ContactAddressID
+				INNER JOIN Template_State_CnfgLocale
+					ON Template_State_CnfgLocale.StateID = Contact_Address.StateID
+					--AND Template_State_CnfgLocale.CultureID = @CultureId
+			WHERE
+				Contact_EntityPersonRelation.EntityTypeID = 1 --Customer
+				AND Contact_EntityPersonRelation.IsActive = 1 --Yes
+		),
+	CTE_DisposedOrSoldInventoryList
+		AS
+		(
+			SELECT
+				  Inventory_History.InventoryID
+				, (CASE WHEN Inventory_History.InventoryStatusID IN (3,4,5) THEN Inventory_History.AsofDate ELSE NULL END) [DisposedDate]
+				, (CASE WHEN Inventory_History.InventoryStatusID IN(9, 7, 10) THEN Inventory_History.AsofDate ELSE NULL END) [SoldDate]
+			FROM
+				Inventory_History
+			WHERE
+				Inventory_History.InventoryStatusID IN (3,4,5,9,10,7) --Donated, Scrap, Write-off, Sold
+				AND Inventory_History.HistoryGenerationReasonID = 2 --Status Change
+		),
+	CTE_PTMSExportList
+		AS
+		(
+			SELECT
+				  Lease_Profile.LessorDefinedUniqueID [LeaseSequenceNumber]
+				, CONVERT(VARCHAR, Inventory_PTMS.InventoryID) [InventoryID] --AssetNumber
+				, Inventory_Profile.Alias [InventoryAlias] --AssetAlias
+				, Customer_Profile.LessorDefinedUniqueID [CustomerUnqiueID]
+				, Customer_Profile.CustomerName [CustomerName]
+				, Customer_Profile.CustomerName [SiteName] --SiteName
+				, GeneralLedger_CompanyProfile.GLCompanyAlias
+				, Inventory_LocationTemplate.LocationCode
+				, Inventory_LocationTemplate_State.StateShortName [InventoryLocationStateShortName] --StateCode
+				, Inventory_LocationTemplate.County [InventoryLocationCountyName] --CountyName
+				, Inventory_LocationTemplate.City [InventoryLocationCityName] --CityName
+				, Inventory_LocationTemplate.ZIP [InventoryLocationZIP] --ZIPCode
+				, Inventory_LocationTemplate.Address [InventoryLocationAddressLine1] --AddressLine1
+				, Inventory_LocationTemplate.Address2 [InventoryLocationAddressLine2] --AddressLine2
+				, SPACE(0) [AssessorAccount] --(Intentionally Blank)
+				, Inventory_Profile.RealOriginalCost [OriginalCost]
+				, Inventory_PTMS.SoftwareExclusionAmount [PTMSSoftwareExlusionAmount]
+				, Inventory_TypeTemplate.InventoryTypeName [InventoryTypeDescription] --OwnerClass
+				, Inventory_Profile.DerivedDescription [InventoryDescription] --Description
+				, Inventory_Profile.SerialNumber [SerialNumber]
+				, CTE_DisposedOrSoldInventoryList.DisposedDate [InventoryDisposedDate]
+				, SPACE(0) [AssetUserText3] --(Intentionally Blank)
+				, UDF_ListValue_ManufacturingCodeID.ListValue [PTMSManufacturingCode]
+				, CEILING(Lease_Contract.Term) [LeaseTerm]
+				, Inventory_PTMS.IsSalesTaxIncluded [PTMSSalesTaxIncluded]
+				, Inventory_PTMS.SalesTaxPercent [PTMSSalesTaxPercentage]
+				, CTE_CustomerMainPrimaryContactList.Address [CustomerAddressLine1]
+				, CTE_CustomerMainPrimaryContactList.Address2 [CustomerAddressLine2]
+				, CTE_CustomerMainPrimaryContactList.City [CustomerCity]
+				, CTE_CustomerMainPrimaryContactList.StateShortName [CustomerStateShortName]
+				, CTE_CustomerMainPrimaryContactList.ZIP [CustomerZIP]
+				------------------------------------------------------------------------------------------------------
+				-- 20211230 not use function ExtractDigitsFromString
+				--, dbo.ExtractDigitsFromString(CTE_CustomerMainPrimaryContactList.PhoneNumber) [CustomerPhoneNumber]
+				--, dbo.ExtractDigitsFromString(CTE_CustomerMainPrimaryContactList.FaxNumber) [CustomerFaxNumber]
+				, CTE_CustomerMainPrimaryContactList.PhoneNumber [CustomerPhoneNumber]
+				, CTE_CustomerMainPrimaryContactList.FaxNumber [CustomerFaxNumber]
+				------------------------------------------------------------------------------------------------------
+				, CTE_CustomerMainPrimaryContactList.ContactPerson [CustomerContactPerson]
+				, Lease_ContractPurchaseOption_CnfgLocale.PurchaseOption [LeasePurchaseOptionType] --LeaseType
+				, Lease_Contract.InceptionDate [LeaseInceptionDate]
+				, Lease_Contract.MaturityDate [LeaseMaturityDate]
+				, Inventory_PTMS.Notes [PTMSNotes]
+				, SPACE(0) [AssetUserDate2] --(Intentionally Blank)
+				, Inventory_PTMS.GLAssetAccount [PTMSGLAssetAccount]
+				, 0.00 [Cost]
+				, (Lease_InventoryInLease.LeaseRentalAmount / Deal_RentalFrequency_Cnfg.FrequencyInMonths) [MonthlyLeaseRent]
+				, 0.00 [AssetUserValue1]
+				, 0.00 [AssessorsValue]
+				, Inventory_PTMS.Division [PTMSDivision]
+				, 'N' [ChargeAdminFee] --Always N, Since Insight will not charge admin fee.
+				, 0.00 [RenderedValue]
+				, UDF_ListValue_OwnershipCodeID.ListValue [PTMSOwnershipCode]
+				, SPACE(0) [AssetUserText2] --(Intentionally Blank)
+				, Inventory_Profile.AcquisitionDate [AcquisitionDate]
+				, Lease_Profile.Syndicationtypeid [Syndications]
+				, Inventory_CategoryTemplate.InventoryCategoryName [InventoryCategory]
+				, CTE_InventoryStatusAsOfDate.InventoryCurrentStatusAsofDate 
+				, Inventory_Profile.OrderNumber
+				, Inventory_Profile.ChangeOrderNumber
+				, Inventory_Profile.ContactPerson
+				, Inventory_Profile.RoomNumber
+				, Inventory_Profile.ReferenceNumber
+				, Inventory_Profile.OtherReference
+				, Inventory_Profile.CostCenter [CostCenter]
+				, FundingSource_PRofile.Company [LabellingLessor]
+				-------------------------------------------------
+				-- 20191206
+				,Inventory_Profile.InventoryStatusID
+				,Inventory_LocationTemplate.StateID
+				-------------------------------------------------
+				-- 20200122
+				,Lease_ContractPurchaseOption_CnfgLocale.PurchaseOptionID
+				,Lease_PurchaseOptionSubType_CnfgLocale.PurchaseOptionSubTypeID
+				-------------------------------------------------
+			FROM
+				Inventory_PTMS
+
+				INNER JOIN Inventory_Profile
+					ON Inventory_Profile.InventoryID = Inventory_PTMS.InventoryID
+					AND Inventory_Profile.InventoryStatusID NOT IN (1, 11) --PreInventory, Error
+					AND Inventory_Profile.IsEligibleForPropertyTaxManagement = 1 --Yes
+
+				INNER JOIN LLC_Profile
+					ON LLC_Profile.LLCID = Inventory_Profile.LLCID
+
+				INNER JOIN Inventory_TypeTemplate
+					ON Inventory_TypeTemplate.InventoryTypeID = Inventory_Profile.InventoryTypeID
+
+				INNER JOIN Portfolio_Profile
+					ON Portfolio_Profile.PortfolioID = Inventory_Profile.PortfolioID
+
+				INNER JOIN GeneralLedger_CompanyProfile
+					ON GeneralLedger_CompanyProfile.CompanyID = Portfolio_Profile.CompanyID
+
+				INNER JOIN Inventory_CategoryTemplate
+					ON Inventory_CategoryTemplate.InventoryCategoryID = Inventory_Profile.InventoryCategoryID
+
+				LEFT JOIN CTE_DisposedOrSoldInventoryList
+					ON CTE_DisposedOrSoldInventoryList.InventoryID = Inventory_PTMS.InventoryID
+
+				LEFT JOIN CTE_InventoryLocation
+					ON CTE_InventoryLocation.InventoryID = Inventory_PTMS.InventoryID
+
+				LEFT JOIN Inventory_LocationTemplate
+					ON Inventory_LocationTemplate.LocationTemplateID = CTE_InventoryLocation.LocationTemplateID
+
+				LEFT JOIN Template_State_CnfgLocale Inventory_LocationTemplate_State
+					ON Inventory_LocationTemplate_State.StateID = Inventory_LocationTemplate.StateID
+					--AND Inventory_LocationTemplate_State.CultureID = @CultureId
+				
+				LEFT JOIN CTE_InventoryStatusAsOfDate
+					ON CTE_InventoryStatusAsOfDate.InventoryID = Inventory_PTMS.InventoryID
+
+				LEFT JOIN CTE_InventoryLease
+					ON CTE_InventoryLease.InventoryID = Inventory_PTMS.InventoryID
+
+				LEFT JOIN Lease_Profile	
+					ON Lease_Profile.LeaseID = CTE_InventoryLease.LeaseID
+
+				LEFT JOIN Lease_Contract
+					ON Lease_Contract.LeaseID = Lease_Profile.LeaseID
+					AND Lease_Contract.IsActive = 1 --Yes
+
+				LEFT JOIN Lease_Investment
+					ON Lease_Investment.LeaseID = Lease_Profile.LeaseID
+					AND Lease_Investment.IsActive = 1 --Yes
+
+				LEFT JOIN Lease_ContractPurchaseOption_CnfgLocale
+					ON Lease_ContractPurchaseOption_CnfgLocale.PurchaseOptionID = Lease_Investment.PurchaseOptionID
+					--AND Lease_ContractPurchaseOption_CnfgLocale.CultureID = @CultureID
+
+				LEFT JOIN Lease_PurchaseOptionSubType_CnfgLocale
+					ON Lease_PurchaseOptionSubType_CnfgLocale.PurchaseOptionSubTypeID = Lease_Investment.PurchaseOptionSubTypeID
+					--AND Lease_PurchaseOptionSubType_CnfgLocale.CultureID= @CultureID
+
+				LEFT JOIN Deal_RentalFrequency_Cnfg
+					ON Deal_RentalFrequency_Cnfg.FrequencyID = Lease_Contract.RentalFrequencyID
+
+				LEFT JOIN Lease_InventoryInLease
+					ON Lease_InventoryInLease.LeaseID = Lease_Profile.LeaseID
+					AND Lease_InventoryInLease.InventoryID = Inventory_PTMS.InventoryID
+					AND IsInLease=1
+				LEFT JOIN CTE_CustomerMainPrimaryContactList
+					ON CTE_CustomerMainPrimaryContactList.CustomerID = Lease_Profile.CustomerID
+
+				LEFT JOIN Customer_Profile
+					ON (Customer_Profile.CustomerID = Inventory_Profile.CustomerID 
+						OR Customer_Profile.CustomerID = Lease_Profile.CustomerID)
+
+				LEFT JOIN UDF_ListValue UDF_ListValue_AssetCategoryCodeID
+					ON UDF_ListValue_AssetCategoryCodeID.ListID = Inventory_PTMS.AssetCategoryCodeID
+					--AND UDF_ListValue_AssetCategoryCodeID.CultureID = @CultureId
+				LEFT JOIN UDF_ListValue UDF_ListValue_BillingStatusID
+					ON UDF_ListValue_BillingStatusID.ListID = Inventory_PTMS.BillingStatusID
+					--AND UDF_ListValue_BillingStatusID.CultureID = @CultureId
+				LEFT JOIN UDF_ListValue UDF_ListValue_ManufacturingCodeID
+					ON UDF_ListValue_ManufacturingCodeID.ListID = Inventory_PTMS.ManufacturingCodeID
+					--AND UDF_ListValue_ManufacturingCodeID.CultureID = @CultureId
+				LEFT JOIN UDF_ListValue UDF_ListValue_OwnershipCodeID
+					ON UDF_ListValue_OwnershipCodeID.ListID = Inventory_PTMS.OwnershipCodeID
+					--AND UDF_ListValue_OwnershipCodeID.CultureID = @CultureId
+				LEFT JOIN UDF_ListValue UDF_ListValue_PropertyTaxExemptionCodeID
+					ON UDF_ListValue_PropertyTaxExemptionCodeID.ListID = Inventory_PTMS.PropertyTaxExemptionCodeID
+					--AND UDF_ListValue_PropertyTaxExemptionCodeID.CultureID = @CultureId
+				LEFT JOIN UDF_ListValue UDF_ListValue_ReimburseCodeID
+					ON UDF_ListValue_ReimburseCodeID.ListID = Inventory_PTMS.ReimburseCodeID
+					--AND UDF_ListValue_ReimburseCodeID.CultureID = @CultureId
+				LEFT JOIN FundingSource_PRofile
+					ON Lease_Profile.LabellingLessorID = FundingSource_PRofile.FundingSourceID
+					AND  FundingSource_PRofile.TypeID IN ( 1, 7)   --Lessor, Private Label
+				--INVENTORY_WHERECONDITION
+				-------------------------
+				-- 20211229
+				INNER JOIN 
+				(
+				SELECT        
+					lp.SequenceNumber 
+				FROM            
+					Lease_Profile lp 
+					INNER JOIN FundingSource_Profile fp 
+						ON lp.LabellingLessorID = fp.FundingSourceId
+				WHERE 
+					fp.FundingSourceId BETWEEN 146 AND 151 
+					AND fp.TypeId IN (1, 7)
+				) imh
+					ON Lease_Profile.SequenceNumber = imh.SequenceNumber
+		WHERE Inventory_Profile.InventoryStatusID = (SELECT InventoryStatusID FROM Inventory_Status_Cnfg WHERE [Description] in ('Leased'))
+		--AND Lease_Profile.LessorDefinedUniqueID = '100-GQ17-3-36-D'
+		
+		)
+--------------------------
+,
+cte_rpt
+AS
+(
+SELECT 
+ ----------------------------------------
+ -- 20200210 nvarchar(50) - Lease Sequence Number does not have a limitation � please match the character limitation in Lease Wave
+   CTE_PTMSExportList.LeaseSequenceNumber 
+ ----------------------------------------
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.LocationCode, ''), 100))) [InventoryLocationCode] --LocationCode
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryID, ''), 25))) [InventoryID] --AssetNumber
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryAlias, ''), 50))) [InventoryAlias] --AssetAlias
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerUnqiueID, ''), 10))) [CustomerUnqiueID]
+ --------------------------------------------------------------------------------------
+ -- 20200210 - Lessee Name is limited to 40 characters
+ -- , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerName, ''), 30))) [CustomerName]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerName, ''), 40))) [CustomerName]
+ --------------------------------------------------------------------------------------
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.SiteName,''), 30))) [SiteName] --SiteName
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.GLCompanyAlias,''), 10))) [CompanyID] --CompanyCode
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryLocationStateShortName, ''), 2))) [InventoryLocationStateShortName] --StateCode
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryLocationCountyName, ''), 25))) [InventoryLocationCountyName] --CountyName
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryLocationCityName, ''), 25))) [InventoryLocationCityName] --CityName
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryLocationZIP, ''), 10))) [InventoryLocationZIP] --ZIPCode
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryLocationAddressLine1, ''), 40))) [InventoryLocationAddressLine1] --AddressLine1
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryLocationAddressLine2, ''), 30))) [InventoryLocationAddressLine2] --AddressLine2
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.AssessorAccount, ''), 20))) [AssessorAccount]
+ , LTRIM(RTRIM(STR(CTE_PTMSExportList.OriginalCost, 16, 2))) [OriginalCost]
+ , LTRIM(RTRIM(COALESCE(STR(CTE_PTMSExportList.PTMSSoftwareExlusionAmount,16,2),SPACE(0)))) [PTMSSoftwareExlusionAmount]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryTypeDescription, ''), 10))) [InventoryTypeDescription] --OwnerClass
+ ------------------------------------------------------------------------------------------------------
+ -- 20200210
+ -- , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryDescription, ''), 50))) [InventoryDescription] --Description
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryDescription, ''), 50))) [InventoryDescription] --Description
+ ------------------------------------------------------------------------------------------------------
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.SerialNumber, ''), 20))) [SerialNumber]
+ , LTRIM(RTRIM(COALESCE(REPLACE(STR(MONTH(CTE_PTMSExportList.InventoryDisposedDate), 2) + '/' + STR(DAY(CTE_PTMSExportList.InventoryDisposedDate), 2) + '/' + STR(YEAR(CTE_PTMSExportList.InventoryDisposedDate), 4), SPACE(1), 0), SPACE(0)))) [InventoryDisposedDate]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.AssetUserText3, ''), 10))) [AssetUserText3]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.PTMSManufacturingCode,''), 6))) [PTMSManufacturingCode]
+ , LTRIM(RTRIM(COALESCE(STR(CTE_PTMSExportList.LeaseTerm, 3), SPACE(0)))) [LeaseTerm]
+ , LTRIM(RTRIM((CASE CTE_PTMSExportList.PTMSSalesTaxIncluded WHEN 1 THEN 'Y' ELSE 'N' END))) [PTMSSalesTaxIncluded]
+ , LTRIM(RTRIM(STR(COALESCE(CTE_PTMSExportList.PTMSSalesTaxPercentage, 0), 7, 4)))[PTMSSalesTaxPercentage]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerAddressLine1, ''), 30))) [CustomerAddressLine1]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerAddressLine2, ''), 30))) [CustomerAddressLine2]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerCity, ''), 25))) [CustomerCity]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerStateShortName, ''), 2))) [CustomerStateShortName]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerZIP, ''), 10))) [CustomerZIP]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerPhoneNumber, ''), 10))) [CustomerPhoneNumber]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerFaxNumber, ''), 10))) [CustomerFaxNumber]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CustomerContactPerson, ''), 30))) [CustomerContactPerson]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.LeasePurchaseOptionType, ''), 6))) [LeasePurchaseOptionType] --LeaseType
+ , LTRIM(RTRIM(COALESCE(REPLACE(STR(MONTH(CTE_PTMSExportList.LeaseInceptionDate), 2) + '/' + STR(DAY(CTE_PTMSExportList.LeaseInceptionDate), 2) + '/' + STR(YEAR(CTE_PTMSExportList.LeaseInceptionDate), 4), SPACE(1), 0), SPACE(0)))) [LeaseInceptionDate]
+ , LTRIM(RTRIM(COALESCE(REPLACE(STR(MONTH(CTE_PTMSExportList.LeaseMaturityDate), 2) + '/' + STR(DAY(CTE_PTMSExportList.LeaseMaturityDate), 2) + '/' + STR(YEAR(CTE_PTMSExportList.LeaseMaturityDate), 4), SPACE(1), 0), SPACE(0)))) [LeaseMaturityDate]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.PTMSNotes,''),254))) [PTMSNotes]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.AssetUserDate2, ''), 10))) [AssetUserDate2]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.PTMSGLAssetAccount,''),35))) [PTMSGLAssetAccount]
+ , LTRIM(RTRIM(COALESCE(STR(CTE_PTMSExportList.Cost, 16, 2), SPACE(0)))) [Cost]
+ , LTRIM(RTRIM(COALESCE(STR(CTE_PTMSExportList.MonthlyLeaseRent, 16, 2), SPACE(0)))) [MonthlyLeaseRent]
+ , LTRIM(RTRIM(COALESCE(STR(CTE_PTMSExportList.AssetUserValue1, 16, 2), SPACE(0)))) [AssetUserValue1]
+ , LTRIM(RTRIM(COALESCE(STR(CTE_PTMSExportList.AssessorsValue, 16, 2), SPACE(0)))) [AssessorsValue]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.PTMSDivision, ''), 10))) [PTMSDivision]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.ChargeAdminFee, ''), 1))) [ChargeAdminFee] --Intentionally Blank (place holder for future use)
+ , LTRIM(RTRIM(COALESCE(STR(CTE_PTMSExportList.RenderedValue, 16, 2), SPACE(0)))) [RenderedValue]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.PTMSOwnershipCode,''),6))) [PTMSOwnershipCode]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.AssetUserText2, ''), 10))) [AssetUserText2]
+ , LTRIM(RTRIM(COALESCE(REPLACE(STR(MONTH(CTE_PTMSExportList.AcquisitionDate), 2) + '/' + STR(DAY(CTE_PTMSExportList.AcquisitionDate), 2) + '/' + STR(YEAR(CTE_PTMSExportList.AcquisitionDate), 4), SPACE(1), 0), SPACE(0)))) [AcquisitionDate]
+ , LTRIM(RTRIM((CASE CTE_PTMSExportList.Syndications WHEN 1 THEN 'N' ELSE 'Y' END))) [Syndications]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.InventoryCategory, ''), 100))) [InventoryCategory] --InventoryCategory
+ , LTRIM(RTRIM(COALESCE(REPLACE(STR(MONTH(CTE_PTMSExportList.InventoryCurrentStatusAsofDate), 2) + '/' + STR(DAY(CTE_PTMSExportList.InventoryCurrentStatusAsofDate), 2) + '/' + STR(YEAR(CTE_PTMSExportList.InventoryCurrentStatusAsofDate), 4), SPACE(1), 0), SPACE(0)))) [InventoryCurrentStatusAsofDate]
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.OrderNumber, ''), 200))) [OrderNumber] --OrderNumber
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.ChangeOrderNumber, ''), 200))) [ChangeOrderNumber] --ChangeOrderNumber
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.ContactPerson, ''), 200))) [ContactPerson] --ContactPerson
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.RoomNumber, ''), 200))) [RoomNumber] --RoomNumber
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.ReferenceNumber, ''), 200))) [ReferenceNumber] --ReferenceNumber
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.OtherReference, ''), 200))) [OtherReference] --OtherReference
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.CostCenter, ''), 200))) [CostCenter] --CostCenter
+ , LTRIM(RTRIM(LEFT(COALESCE(CTE_PTMSExportList.LabellingLessor, ''), 140))) [LabellingLessor] --CostCenter
+ ------------------------------------------------------------------------------------------------------------
+ -- test code
+ ,CTE_PTMSExportList.InventoryStatusID
+ ,CTE_PTMSExportList.StateID
+ ,CTE_PTMSExportList.[PurchaseOptionID]
+    ,CTE_PTMSExportList.[PurchaseOptionSubTypeID]
+ ------------------------------------------------------------------------------------------------------------
+FROM
+ CTE_PTMSExportList
+)
+-----------------------------------------------------------------------------
+---- test code
+
+--SELECT * FROM cte_rpt
+-----------------------------------------------------------------------------
+,
+cte_state
+AS
+ (
+ SELECT 
+  c.CountryName
+  ,c.CountryShortCode Country 
+  ,c.CountryID
+  ,s.[Description] [State] 
+  ,s.StateID
+ FROM [dbo].[Template_State_Cnfg] s
+ INNER JOIN [dbo].[Template_Country_CnfgLocale] c
+ ON c.CountryID = s.CountryID
+ )
+SELECT --Distinct
+  Cast(cte_rpt.[LeaseSequenceNumber] AS Char(50)) as [Lease Number]
+ ,cte_rpt.[InventoryLocationCode]  AS [Location Code] --LocationCode
+ ,cte_rpt.[InventoryID] AS  [Asset Number]  --AssetNumber
+ ,Cast(cte_rpt.CustomerUnqiueID AS Char(10)) AS [Customer Number]
+ ,Replace(Replace(Replace(Replace(cte_rpt.CustomerName,Char(10),''),Char(13),''),Char(9),''),'`','''') AS [Lessee Name] 
+ ,cte_rpt.[CompanyID] AS [Company Code]  --CompanyCode
+ , s.Country [Country Code]
+ ,cte_rpt.[InventoryLocationStateShortName] AS  [State Code] --StateCode
+ ,cte_rpt.InventoryLocationCountyName [County Name]
+ ,cte_rpt.[InventoryLocationCityName] [City Name]
+ ,cte_rpt.[InventoryLocationZIP] [ZIP Code]
+ ,Replace(Replace(Replace(cte_rpt.InventoryLocationAddressLine1,Char(10),''),Char(13),''),Char(9),'') AS [Address Line1] --&gt; nVarchar(30)
+ ,Replace(Replace(Replace(cte_rpt.InventoryLocationAddressLine2,Char(10),''),Char(13),''),Char(9),'') AS [Address Line2] --&gt; nVarchar(30)
+ ,cte_rpt.[OriginalCost] AS [Original Cost]
+ ,cte_rpt.[InventoryTypeDescription] [Owner Class] --OwnerClass
+ ,Replace(Replace(Replace(Left(cte_rpt.InventoryDescription,50),Char(10),''),Char(13),''),Char(9),'') AS [Description] --&gt; varchar(30)
+ ,Replace(Replace(Replace(cte_rpt.CustomerAddressLine1,Char(10),''),Char(13),''),Char(9),'') AS [Lessee Address 1] --&gt; nVarchar(30)
+    ,Replace(Replace(Replace(cte_rpt.CustomerAddressLine2,Char(10),''),Char(13),''),Char(9),'') AS [Lessee Address 2] --&gt; nVarchar(30)
+ ,cte_rpt.[CustomerCity] [Lessee City Name]
+ ,Cast(Left(cte_rpt.CustomerStateShortName,2) AS Char(2)) AS [Lessee State] 
+ ,cte_rpt.[CustomerZIP] [Lessee Zip]
+ ,cte_rpt.[LeasePurchaseOptionType] [Lease Type] --LeaseType
+ ,cte_rpt.[PTMSOwnershipCode] [Ownership Code]
+ ,Cast(Left(cte_rpt.[AcquisitionDate],10) as varchar(10)) AS AcquisitionDate
+ ,cte_rpt.[InventoryCategory] [Asset Category]  --InventoryCategory
+ ,Replace(Replace(Replace(Left(LabellingLessor,100),Char(10),''),Char(13),''),Char(9),'') AS [Labeling Lessor] 
+ --,cte_rpt.InventoryStatusID
+ --,cte_rpt.StateID
+   --,cte_rpt.[PurchaseOptionID]
+   --   ,cte_rpt.PurchaseOptionSubTypeID
+   --,IsNull(t.PurchaseOptionSubType,'') PurchaseOptionSubType
+--INTO Tax.dbo.Taxble_All
+FROM cte_rpt
+Left Join [Lease_PurchaseOptionSubType_CnfgLocale] t
+ On cte_rpt.PurchaseOptionSubTypeID = t.PurchaseOptionSubTypeID
+LEFT JOIN cte_state s
+ ON cte_rpt.StateID = s.StateID
+ AND s.CountryID = 1 -- USA
+Where cte_rpt.PurchaseOptionSubTypeID != 4 -- not equal 'IPA'
+  OR cte_rpt.PurchaseOptionSubTypeID is Null
+ORDER BY 
+ cte_rpt.InventoryID,
+ cte_rpt.CustomerUnqiueID
+</CommandText>
+      </Query>
+      <Fields>
+        <Field Name="Lease_Number">
+          <DataField>Lease Number</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Location_Code">
+          <DataField>Location Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Asset_Number">
+          <DataField>Asset Number</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Customer_Number">
+          <DataField>Customer Number</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_Name">
+          <DataField>Lessee Name</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Company_Code">
+          <DataField>Company Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Country_Code">
+          <DataField>Country Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="State_Code">
+          <DataField>State Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="County_Name">
+          <DataField>County Name</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="City_Name">
+          <DataField>City Name</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="ZIP_Code">
+          <DataField>ZIP Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Address_Line1">
+          <DataField>Address Line1</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Address_Line2">
+          <DataField>Address Line2</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Original_Cost">
+          <DataField>Original Cost</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Owner_Class">
+          <DataField>Owner Class</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Description">
+          <DataField>Description</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_Address_1">
+          <DataField>Lessee Address 1</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_Address_2">
+          <DataField>Lessee Address 2</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_City_Name">
+          <DataField>Lessee City Name</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_State">
+          <DataField>Lessee State</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_Zip">
+          <DataField>Lessee Zip</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lease_Type">
+          <DataField>Lease Type</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Ownership_Code">
+          <DataField>Ownership Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="AcquisitionDate">
+          <DataField>AcquisitionDate</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Asset_Category">
+          <DataField>Asset Category</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Labeling_Lessor">
+          <DataField>Labeling Lessor</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+      </Fields>
+    </DataSet>
+    <DataSet Name="DataSet1">
+      <Query>
+        <DataSourceName>DataSource1</DataSourceName>
+        <CommandType>StoredProcedure</CommandType>
+        <CommandText>iic_IMH_PTMS</CommandText>
+      </Query>
+      <Fields>
+        <Field Name="Lease_Number">
+          <DataField>Lease Number</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Location_Code">
+          <DataField>Location Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Asset_Number">
+          <DataField>Asset Number</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="InventoryID">
+          <DataField>InventoryID</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Customer_Number">
+          <DataField>Customer Number</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_Name">
+          <DataField>Lessee Name</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Company_Code">
+          <DataField>Company Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Country_Code">
+          <DataField>Country Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="State_Code">
+          <DataField>State Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="County_Name">
+          <DataField>County Name</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="City_Name">
+          <DataField>City Name</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="ZIP_Code">
+          <DataField>ZIP Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Address_Line1">
+          <DataField>Address Line1</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Address_Line2">
+          <DataField>Address Line2</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Original_Cost">
+          <DataField>Original Cost</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Owner_Class">
+          <DataField>Owner Class</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Description">
+          <DataField>Description</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_Address_1">
+          <DataField>Lessee Address 1</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_Address_2">
+          <DataField>Lessee Address 2</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_City_Name">
+          <DataField>Lessee City Name</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_State">
+          <DataField>Lessee State</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lessee_Zip">
+          <DataField>Lessee Zip</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Lease_Type">
+          <DataField>Lease Type</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Ownership_Code">
+          <DataField>Ownership Code</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="AcquisitionDate">
+          <DataField>AcquisitionDate</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Asset_Category">
+          <DataField>Asset Category</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Labeling_Lessor">
+          <DataField>Labeling Lessor</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="Border">
+          <DataField>Border</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="CustomerID">
+          <DataField>CustomerID</DataField>
+          <rd:TypeName>System.Int32</rd:TypeName>
+        </Field>
+        <Field Name="CustomerName">
+          <DataField>CustomerName</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="LeaseID">
+          <DataField>LeaseID</DataField>
+          <rd:TypeName>System.Int32</rd:TypeName>
+        </Field>
+        <Field Name="SequenceNumber">
+          <DataField>SequenceNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="InventoryIDa">
+          <DataField>InventoryIDa</DataField>
+          <rd:TypeName>System.Int64</rd:TypeName>
+        </Field>
+        <Field Name="AspireNumber">
+          <DataField>AspireNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="InventoryStatusID">
+          <DataField>InventoryStatusID</DataField>
+          <rd:TypeName>System.Byte</rd:TypeName>
+        </Field>
+        <Field Name="SerialNumber">
+          <DataField>SerialNumber</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="InventoryInLeaseID">
+          <DataField>InventoryInLeaseID</DataField>
+          <rd:TypeName>System.Int64</rd:TypeName>
+        </Field>
+        <Field Name="InceptionDate">
+          <DataField>InceptionDate</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="MaturityDate">
+          <DataField>MaturityDate</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="InventoryStatusName">
+          <DataField>InventoryStatusName</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+        <Field Name="SyndicationFundingSource">
+          <DataField>SyndicationFundingSource</DataField>
+          <rd:TypeName>System.String</rd:TypeName>
+        </Field>
+      </Fields>
+    </DataSet>
+  </DataSets>
+  <ReportSections>
+    <ReportSection>
+      <Body>
+        <ReportItems>
+          <Textbox Name="textbox1">
+            <CanGrow>true</CanGrow>
+            <KeepTogether>true</KeepTogether>
+            <Paragraphs>
+              <Paragraph>
+                <TextRuns>
+                  <TextRun>
+                    <Value>IMH_PTMS</Value>
+                    <Style>
+                      <FontFamily>Arial</FontFamily>
+                      <FontSize>24pt</FontSize>
+                      <FontWeight>Normal</FontWeight>
+                      <Color>DarkBlue</Color>
+                    </Style>
+                  </TextRun>
+                </TextRuns>
+                <Style />
+              </Paragraph>
+            </Paragraphs>
+            <rd:DefaultName>textbox1</rd:DefaultName>
+            <Height>0.43in</Height>
+            <Width>31in</Width>
+            <Style>
+              <PaddingLeft>2pt</PaddingLeft>
+              <PaddingRight>2pt</PaddingRight>
+              <PaddingTop>2pt</PaddingTop>
+              <PaddingBottom>2pt</PaddingBottom>
+            </Style>
+          </Textbox>
+          <Tablix Name="table1">
+            <TablixBody>
+              <TablixColumns>
+                <TablixColumn>
+                  <Width>1.125in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>3.20833in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>3.23958in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.97917in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.59375in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.91667in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.20833in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.11458in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.8125in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>3.13542in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.42709in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.20833in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.14583in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.08333in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.22917in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.44792in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.21875in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.80208in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.77083in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.14583in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>3.29167in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>3.13542in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>2.04167in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1.13542in</Width>
+                </TablixColumn>
+                <TablixColumn>
+                  <Width>1in</Width>
+                </TablixColumn>
+              </TablixColumns>
+              <TablixRows>
+                <TablixRow>
+                  <Height>0.22in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox10">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Asset County</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox10</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox28">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Asset State</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox28</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox32">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Lessee Name</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox32</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox35">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Asset Address Line 1</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox35</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox37">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Asset Address Line 2</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox37</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox39">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Asset City</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox39</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox41">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Asset ZIP </Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox41</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox43">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Location Code</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox43</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox46">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Lease Number</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox46</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox48">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Asset Number</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox48</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox50">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Aspire Asset Number</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox50</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox82">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Serial Number</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox82</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox2">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Description</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox2</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox4">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Acquisition Date</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox4</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox13">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Inception Date</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox13</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox27">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Maturity Date</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox27</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox52">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Original Cost</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox52</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox54">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Owner Class</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox54</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox56">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Ownership Code</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox56</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox58">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Syndication Funding Source</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox58</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox60">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Lease Type</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox60</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox62">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Customer Number</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox62</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox64">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Asset Category</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox64</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox66">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Inventory Status Name</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox66</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox68">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Labeling Lessor</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox68</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox70">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Country Code</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox70</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox72">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Lessee Address 1</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox72</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox74">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Lessee Address 2</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox74</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox76">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Lessee City Name</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox76</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox78">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Lessee State</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox78</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Textbox80">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>Lessee Zip</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <FontSize>11pt</FontSize>
+                                    <FontWeight>Bold</FontWeight>
+                                    <Color>White</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style />
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Textbox80</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <BackgroundColor>CornflowerBlue</BackgroundColor>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+                <TablixRow>
+                  <Height>0.21in</Height>
+                  <TablixCells>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="County_Name">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!County_Name.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>County_Name</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="State_Code">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!State_Code.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>State_Code</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Lessee_Name1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Lessee_Name.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Lessee_Name1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Address_Line1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Address_Line1.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Address_Line1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Address_Line2">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Address_Line2.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Address_Line2</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="City_Name1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!City_Name.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>City_Name1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="ZIP_Code1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!ZIP_Code.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>ZIP_Code1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Location_Code1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Location_Code.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Location_Code1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Lease_Number">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Lease_Number.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Lease_Number</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Asset_Number1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Asset_Number.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Asset_Number1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="AspireNumber1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!AspireNumber.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>AspireNumber1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="SerialNumber1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!SerialNumber.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>SerialNumber1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Description1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Description.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Description1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="AcquisitionDate">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!AcquisitionDate.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Format>M/d/yyyy</Format>
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>AcquisitionDate</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="InceptionDate">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!InceptionDate.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Format>M/d/yyyy</Format>
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>InceptionDate</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="MaturityDate">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!MaturityDate.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Format>M/d/yyyy</Format>
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>MaturityDate</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <TopBorder>
+                              <Width>1pt</Width>
+                            </TopBorder>
+                            <LeftBorder>
+                              <Width>1pt</Width>
+                            </LeftBorder>
+                            <RightBorder>
+                              <Width>1pt</Width>
+                            </RightBorder>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Original_Cost1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Original_Cost.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Format>0.00;(0.00)</Format>
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Original_Cost1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Owner_Class1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Owner_Class.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Owner_Class1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Ownership_Code1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Ownership_Code.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Ownership_Code1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="SyndicationFundingSource1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!SyndicationFundingSource.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>SyndicationFundingSource1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Lease_Type1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Lease_Type.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Lease_Type1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Customer_Number1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Customer_Number.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Customer_Number1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Asset_Category1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Asset_Category.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Asset_Category1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="InventoryStatusName1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!InventoryStatusName.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>InventoryStatusName1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Labeling_Lessor">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Labeling_Lessor.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Labeling_Lessor</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Country_Code1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Country_Code.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Country_Code1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Lessee_Address_11">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Lessee_Address_1.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Lessee_Address_11</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Lessee_Address_21">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Lessee_Address_2.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Lessee_Address_21</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Lessee_City_Name1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Lessee_City_Name.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Lessee_City_Name1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Lessee_State1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Lessee_State.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Lessee_State1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                    <TablixCell>
+                      <CellContents>
+                        <Textbox Name="Lessee_Zip1">
+                          <CanGrow>true</CanGrow>
+                          <KeepTogether>true</KeepTogether>
+                          <Paragraphs>
+                            <Paragraph>
+                              <TextRuns>
+                                <TextRun>
+                                  <Value>=Fields!Lessee_Zip.Value</Value>
+                                  <Style>
+                                    <FontFamily />
+                                    <Color>#333333</Color>
+                                  </Style>
+                                </TextRun>
+                              </TextRuns>
+                              <Style>
+                                <TextAlign>Left</TextAlign>
+                              </Style>
+                            </Paragraph>
+                          </Paragraphs>
+                          <rd:DefaultName>Lessee_Zip1</rd:DefaultName>
+                          <Style>
+                            <Border>
+                              <Color>LightGrey</Color>
+                              <Style>Solid</Style>
+                            </Border>
+                            <PaddingLeft>2pt</PaddingLeft>
+                            <PaddingRight>2pt</PaddingRight>
+                            <PaddingTop>2pt</PaddingTop>
+                            <PaddingBottom>2pt</PaddingBottom>
+                          </Style>
+                        </Textbox>
+                      </CellContents>
+                    </TablixCell>
+                  </TablixCells>
+                </TablixRow>
+              </TablixRows>
+            </TablixBody>
+            <TablixColumnHierarchy>
+              <TablixMembers>
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+                <TablixMember />
+              </TablixMembers>
+            </TablixColumnHierarchy>
+            <TablixRowHierarchy>
+              <TablixMembers>
+                <TablixMember>
+                  <KeepWithGroup>After</KeepWithGroup>
+                  <RepeatOnNewPage>true</RepeatOnNewPage>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+                <TablixMember>
+                  <Group Name="table1_Details_Group">
+                    <DataElementName>Detail</DataElementName>
+                  </Group>
+                  <TablixMembers>
+                    <TablixMember />
+                  </TablixMembers>
+                  <DataElementName>Detail_Collection</DataElementName>
+                  <DataElementOutput>Output</DataElementOutput>
+                  <KeepTogether>true</KeepTogether>
+                </TablixMember>
+              </TablixMembers>
+            </TablixRowHierarchy>
+            <DataSetName>DataSet1</DataSetName>
+            <Top>0.43in</Top>
+            <Height>0.43in</Height>
+            <Width>56.41667in</Width>
+            <ZIndex>1</ZIndex>
+            <Style />
+          </Tablix>
+        </ReportItems>
+        <Height>0.86in</Height>
+        <Style />
+      </Body>
+      <Width>60.73958in</Width>
+      <Page>
+        <LeftMargin>1in</LeftMargin>
+        <RightMargin>1in</RightMargin>
+        <TopMargin>1in</TopMargin>
+        <BottomMargin>1in</BottomMargin>
+        <Style />
+      </Page>
+    </ReportSection>
+  </ReportSections>
+  <ReportParametersLayout>
+    <GridLayoutDefinition>
+      <NumberOfColumns>4</NumberOfColumns>
+      <NumberOfRows>2</NumberOfRows>
+    </GridLayoutDefinition>
+  </ReportParametersLayout>
+  <Language>en-US</Language>
+  <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
+  <rd:ReportUnitType>Inch</rd:ReportUnitType>
+  <rd:ReportServerUrl>https://reporting.insightinvestments.com/ReportServer</rd:ReportServerUrl>
+  <rd:ReportID>98606351-e255-40e3-8112-b3d84b534fe5</rd:ReportID>
+</Report>

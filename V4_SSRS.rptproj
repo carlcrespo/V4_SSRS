@@ -87,6 +87,7 @@
     <Report Include="Discount for Loan Untied Payments Report.rdl" />
     <Report Include="Discount for Loan Untied Payments Report_20250908.rdl" />
     <Report Include="Discount For Loan Validation Report.rdl" />
+    <Report Include="EOL_Lease_Details_Report.rdl" />
     <Report Include="EOL_Lease_Details_Report_fix.rdl" />
     <Report Include="Equipment Location By Customer.rdl" />
     <Report Include="Estimated_Unguaranteed_Residual_Value_Report.rdl" />
@@ -100,6 +101,8 @@
     <Report Include="Harvard_Leases_Report.rdl" />
     <Report Include="Hershey_Term_Notices_Report.rdl" />
     <Report Include="Hyundai_Attachment_A.rdl" />
+    <Report Include="IMH_Assets.rdl" />
+    <Report Include="IMH_PTMS.rdl" />
     <Report Include="Interim_Rent_Report.rdl" />
     <Report Include="Lease Income Report for FAR.rdl" />
     <Report Include="Lease Profile Report for FAR.rdl" />
