@@ -70,6 +70,7 @@
     <Report Include="CNB_Invoice_Log_Report.rdl" />
     <Report Include="CNB_Projections_Deals_Moved_Advanced_Report.rdl" />
     <Report Include="CNB_Projections_Report.rdl" />
+    <Report Include="Copy of Account Assignment Report.rdl" />
     <Report Include="Credit_Ratings_Report_All.rdl" />
     <Report Include="Credit_Ratings_Report_Recent.rdl" />
     <Report Include="Customer Exposure.rdl" />
