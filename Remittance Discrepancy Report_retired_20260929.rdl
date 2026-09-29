@@ -1,8 +1,6 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Report MustUnderstand="df" xmlns="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition" xmlns:rd="http://schemas.microsoft.com/SQLServer/reporting/reportdesigner" xmlns:df="http://schemas.microsoft.com/sqlserver/reporting/2016/01/reportdefinition/defaultfontfamily" xmlns:am="http://schemas.microsoft.com/sqlserver/reporting/authoringmetadata">
-  <Description>Version: 20260916 TrackIt #55053
-...update the Remittance Discrepancy Report logic to filter out Invoice Group ID 3730 
-from any possible consideration or output.</Description>
+  <Description>Version: 20221230</Description>
   <am:AuthoringMetadata>
     <am:CreatedBy>
       <am:Name>MSRB</am:Name>
@@ -10,9 +8,9 @@ from any possible consideration or output.</Description>
     </am:CreatedBy>
     <am:UpdatedBy>
       <am:Name>SSDTRS</am:Name>
-      <am:Version>18.8.12021.73</am:Version>
+      <am:Version>17.14.36804.6</am:Version>
     </am:UpdatedBy>
-    <am:LastModifiedTimestamp>2026-09-29T20:32:50.2549802Z</am:LastModifiedTimestamp>
+    <am:LastModifiedTimestamp>2026-02-09T22:40:03.5350309Z</am:LastModifiedTimestamp>
   </am:AuthoringMetadata>
   <df:DefaultFontFamily>Segoe UI</df:DefaultFontFamily>
   <AutoRefresh>0</AutoRefresh>
@@ -95,8 +93,7 @@ ORDER BY IGP.CustomerName</CommandText>
     <DataSet Name="DataSet2">
       <Query>
         <DataSourceName>LW_PRD</DataSourceName>
-        <CommandText>/*
---20230123
+        <CommandText>--20230123
 Select
 FSP.Alias as 'Labelling Lessor'
 ,FSP.Company as 'Labelling Lessor Company'
@@ -119,40 +116,6 @@ LEFT JOIN Customer_Profile cp
 WHERE MP.LabellingLessorID in (146,147,148,149,150,151,152,223)
 AND RP.RemittanceCode = 'FTB 1'
 AND MP.IsActive = 1 
-ORDER BY IGP.CustomerName--20260916 
-*/
-/*
-TrackIt #55053
-...update the Remittance Discrepancy Report logic to filter out Invoice Group ID 3730 
-from any possible consideration or output.
-*/
-Select
-FSP.Alias as 'Labelling Lessor'
-,FSP.Company as 'Labelling Lessor Company'
-,FSP.FundingSourceNumber as 'Labelling Lessor Code'
-,IGP.CustomerName as 'Lessee Name'
-,IGP.InvoiceGroupName
-,RP.RemittanceName
-,RP.RemittanceCode
-,cp.AccountNumber
-------------------
--- test code
---,igp.InvoiceGroupID
-------------------
-FROM InvoiceGroup_Profile IGP
-
-LEFT JOIN Remittance_Profile RP
-ON IGP.RemittanceID = RP.RemittanceID
-LEFT JOIN MLA_Profile MP
-ON IGP.CustomerID = MP.CustomerID
-LEFT JOIN FundingSource_Profile FSP
-ON MP.LabellingLessorID = FSP.FundingSourceId
-LEFT JOIN Customer_Profile cp
-       ON igp.CustomerID = cp.CustomerID
-WHERE MP.LabellingLessorID in (146,147,148,149,150,151,152,223)
-AND RP.RemittanceCode = 'FTB 1'
-AND MP.IsActive = 1 
-AND igp.InvoiceGroupID NOT IN (3730,3839)  --  != 3730 -- 20260916
 ORDER BY IGP.CustomerName</CommandText>
       </Query>
       <Fields>
@@ -1037,6 +1000,6 @@ ORDER BY IGP.CustomerName</CommandText>
   <Language>en-US</Language>
   <ConsumeContainerWhitespace>true</ConsumeContainerWhitespace>
   <rd:ReportUnitType>Inch</rd:ReportUnitType>
-  <rd:ReportServerUrl>https://corpsmap20.insightinvestments.com/ReportServer</rd:ReportServerUrl>
+  <rd:ReportServerUrl>https://reporting.insightinvestments.com/ReportServer</rd:ReportServerUrl>
   <rd:ReportID>b6d0e717-4820-4825-9e70-16c3ebf6496b</rd:ReportID>
 </Report>
